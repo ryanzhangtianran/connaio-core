@@ -145,6 +145,7 @@ func router(isDebug bool, secret string, dohServer string, cors Cors) *chi.Mux {
 		})
 		r.Post("/easyconnect/test", easyConnectTest) // logs in with the given settings, reports what the gateway handed out, logs out
 		r.Mount("/network", networkRouter())
+		r.Post("/flush-dns", flushSystemDNS) // the system's DNS cache, by a root core on macOS
 		r.Mount("/storage", storageRouter())
 		if !embedMode { // disallow restart in embed mode
 			r.Mount("/restart", restartRouter())
