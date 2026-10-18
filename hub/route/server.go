@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime/debug"
 	"strconv"
@@ -293,10 +294,15 @@ func startUnix(cfg *Config) {
 			log.Errorln("External controller unix listen error: %s", err)
 			return
 		}
-		// CONNAIO_SOCKET_UID hands a root daemon's socket to the one user its GUI runs as.
+		// CONNAIO_SOCKET_UID hands a root daemon's socket to the one user its GUI runs as;
+		// CONNAIO_SOCKET_GROUP to a group (admin on macOS: users who could become root anyway).
 		if uid, err := strconv.Atoi(os.Getenv("CONNAIO_SOCKET_UID")); err == nil {
 			_ = os.Chown(addr, uid, -1)
 			_ = os.Chmod(addr, 0o600)
+		} else if g, err := user.LookupGroup(os.Getenv("CONNAIO_SOCKET_GROUP")); err == nil {
+			gid, _ := strconv.Atoi(g.Gid)
+			_ = os.Chown(addr, -1, gid)
+			_ = os.Chmod(addr, 0o660)
 		} else {
 			_ = os.Chmod(addr, 0o666)
 		}

@@ -158,6 +158,7 @@ func run() {
 			homeDir = filepath.Join(currentDir, homeDir)
 		}
 		C.SetHomeDir(homeDir)
+		_ = os.MkdirAll(homeDir, 0o755) // -config skips config.Init, which would make it; the cache and socket go here
 	}
 
 	if geodataMode {
