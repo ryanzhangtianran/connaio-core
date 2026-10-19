@@ -37,9 +37,6 @@ func (rg Range) Key() string {
 
 // Without is r less the ranges (by Key) and names in skip.
 func (r Routing) Without(skip []string) Routing {
-	if len(skip) == 0 {
-		return r
-	}
 	r.IP = slices.DeleteFunc(slices.Clone(r.IP), func(rg Range) bool { return slices.Contains(skip, rg.Key()) })
 	r.Domains = slices.DeleteFunc(slices.Clone(r.Domains), func(d string) bool { return slices.Contains(skip, d) })
 	return r
