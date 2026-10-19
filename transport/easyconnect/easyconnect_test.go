@@ -165,3 +165,18 @@ func TestFieldsLoseTheirCDATAAndOnlyCredentialErrorsAreRefused(t *testing.T) {
 		t.Error("loginError classification")
 	}
 }
+
+func TestRoutingWithout(t *testing.T) {
+	a := netip.MustParseAddr
+	r := Routing{
+		IP:      []Range{{From: a("10.0.0.1"), To: a("10.255.255.254")}, {From: a("10.90.63.2"), To: a("10.90.63.2")}, {From: a("1.0.0.1"), To: a("9.255.255.254")}},
+		Domains: []string{"hkust-gz.edu.cn", "example.edu.cn"},
+	}
+	got := r.Without([]string{"1.0.0.1-9.255.255.254", "10.90.63.2", "example.edu.cn"})
+	if len(got.IP) != 1 || got.IP[0].Key() != "10.0.0.1-10.255.255.254" || !reflect.DeepEqual(got.Domains, []string{"hkust-gz.edu.cn"}) {
+		t.Fatalf("Without = %+v", got)
+	}
+	if len(r.IP) != 3 || len(r.Domains) != 2 {
+		t.Fatalf("Without changed the original: %+v", r)
+	}
+}

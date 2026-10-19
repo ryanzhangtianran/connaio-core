@@ -27,6 +27,24 @@ type Range struct {
 	Protocol string     `json:"protocol"` // all, tcp, udp, icmp
 }
 
+// Key names a range as a client picks it: "from-to", or the one address.
+func (rg Range) Key() string {
+	if rg.From == rg.To {
+		return rg.From.String()
+	}
+	return rg.From.String() + "-" + rg.To.String()
+}
+
+// Without is r less the ranges (by Key) and names in skip.
+func (r Routing) Without(skip []string) Routing {
+	if len(skip) == 0 {
+		return r
+	}
+	r.IP = slices.DeleteFunc(slices.Clone(r.IP), func(rg Range) bool { return slices.Contains(skip, rg.Key()) })
+	r.Domains = slices.DeleteFunc(slices.Clone(r.Domains), func(d string) bool { return slices.Contains(skip, d) })
+	return r
+}
+
 // MatchHost reports whether host is one of the routed names, or under one.
 func (r *Routing) MatchHost(host string) bool {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))

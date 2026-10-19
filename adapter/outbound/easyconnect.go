@@ -105,6 +105,10 @@ type EasyConnectOption struct {
 	Password   string `proxy:"password"`
 	TOTPSecret string `proxy:"totp-secret,omitempty"`
 	UDP        bool   `proxy:"udp,omitempty"`
+
+	// SkipRoutes are gateway routes (Range.Key, or a name) the EASYCONNECT rule leaves to the
+	// rules after it; not part of key(), so changing them keeps the session.
+	SkipRoutes []string `proxy:"skip-routes,omitempty"`
 }
 
 // EasyConnectStatus is what the API reports for one outbound.
@@ -415,14 +419,14 @@ func (e *EasyConnect) teardown() {
 	e.resolver = nil
 }
 
-// Routing is what the gateway routes, or nil while the tunnel is down; a
-// down tunnel is started in the background.
+// Routing is what the gateway routes less SkipRoutes, or nil while the tunnel
+// is down; a down tunnel is started in the background.
 func (e *EasyConnect) Routing() *easyconnect.Routing {
 	e.mu.Lock()
 	up := e.session != nil && e.session.Failed() == nil
 	var routing easyconnect.Routing
 	if up {
-		routing = e.session.Routing
+		routing = e.session.Routing.Without(e.option.SkipRoutes)
 	}
 	e.mu.Unlock()
 	if !up {
