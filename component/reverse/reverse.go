@@ -20,12 +20,14 @@ const (
 	StateConnecting = "connecting"
 	StateRunning    = "running"
 	StateRetrying   = "retrying"
+	StateStopped    = "stopped" // disabled in the config: listed, not run
 )
 
 type Tunnel struct {
 	Name        string
 	Type        string
 	DialerProxy string
+	Disabled    bool   // `disabled: true`: kept in the config, stopped
 	hash        string // raw config fingerprint, so a reload only restarts tunnels that changed
 	run         func(ctx context.Context)
 	detail      func(s *Status) // fills Forwards, may refine State
@@ -64,7 +66,8 @@ func Parse(mapping map[string]any, tunnel C.Tunnel) (*Tunnel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
-	t := &Tunnel{Name: name, hash: string(raw)}
+	disabled, _ := mapping["disabled"].(bool)
+	t := &Tunnel{Name: name, Disabled: disabled, hash: string(raw)}
 	switch t.Type, _ = mapping["type"].(string); t.Type {
 	case "frp":
 		err = parseFrp(t, mapping, tunnel)
@@ -120,8 +123,9 @@ func (t *Tunnel) retry(ctx context.Context, serve func(ctx context.Context, up f
 }
 
 var (
-	mu     sync.Mutex
-	active = map[string]*running{}
+	mu      sync.Mutex
+	active  = map[string]*running{}
+	stopped []*Tunnel // the disabled ones, for Statuses
 )
 
 type running struct {
@@ -134,7 +138,13 @@ func Patch(tunnels []*Tunnel) {
 	mu.Lock()
 	defer mu.Unlock()
 	next := make(map[string]*Tunnel, len(tunnels))
+	stopped = nil
 	for _, t := range tunnels {
+		if t.Disabled {
+			t.setState(StateStopped, nil)
+			stopped = append(stopped, t)
+			continue
+		}
 		next[t.Name] = t
 	}
 	for name, r := range active {
@@ -155,13 +165,14 @@ func Patch(tunnels []*Tunnel) {
 	}
 }
 
-// Statuses reports every active tunnel, sorted by name.
+// Statuses reports every tunnel, running or stopped, sorted by name.
 func Statuses() []Status {
 	mu.Lock()
-	tunnels := make([]*Tunnel, 0, len(active))
+	tunnels := make([]*Tunnel, 0, len(active)+len(stopped))
 	for _, r := range active {
 		tunnels = append(tunnels, r.tunnel)
 	}
+	tunnels = append(tunnels, stopped...)
 	mu.Unlock()
 	slices.SortFunc(tunnels, func(a, b *Tunnel) int { return strings.Compare(a.Name, b.Name) })
 	statuses := make([]Status, len(tunnels))

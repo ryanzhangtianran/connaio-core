@@ -91,6 +91,33 @@ func TestSSHTunnel(t *testing.T) {
 	require.Equal(t, StateRunning, Statuses()[0].State)
 }
 
+// TestDisabledTunnel: a tunnel disabled in the config is listed as stopped and not run; enabling it
+// again starts it.
+func TestDisabledTunnel(t *testing.T) {
+	echo := startEcho(t)
+	server := startSSHServer(t)
+	remote := net.JoinHostPort("127.0.0.1", strconv.Itoa(freePort(t)))
+	cfg := map[string]any{
+		"name": "ssh-off", "type": "ssh", "disabled": true,
+		"server": "127.0.0.1", "port": portOf(t, server),
+		"username": "u", "password": "pw",
+		"forwards": []any{map[string]any{"remote": remote, "local": echo}},
+	}
+	tun, err := Parse(cfg, startTunnel(t))
+	require.NoError(t, err)
+	Patch([]*Tunnel{tun})
+	defer Patch(nil)
+	require.Equal(t, StateStopped, Statuses()[0].State)
+	_, err = net.DialTimeout("tcp", remote, time.Second)
+	require.Error(t, err, "a stopped tunnel must not listen on the server")
+
+	cfg["disabled"] = false
+	on, err := Parse(cfg, startTunnel(t))
+	require.NoError(t, err)
+	Patch([]*Tunnel{on})
+	requireEcho(t, remote)
+}
+
 func TestParseErrors(t *testing.T) {
 	frpCfg := func(extra map[string]any) map[string]any {
 		cfg := map[string]any{"serverAddr": "127.0.0.1"}
