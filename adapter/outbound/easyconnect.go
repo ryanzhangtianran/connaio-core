@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,6 +48,53 @@ type EasyConnect struct {
 	done      chan struct{} // closed when the login in progress ends
 	lastError error
 	lastTry   time.Time
+	// kicks are when the gateway ended the session lately; kicked says it did kickLimit times
+	// within kickWindow, so the account is likely signed in elsewhere too and logging in again
+	// would only take turns with it: no more logins until Reconnect.
+	kicks  []time.Time
+	kicked bool
+}
+
+const (
+	kickLimit  = 3
+	kickWindow = 10 * time.Minute
+)
+
+// errKicked stands for kicked in lastError and the status.
+var errKicked = E.New("the gateway keeps ending the session: the account is probably signed in elsewhere; reconnect by hand")
+
+// noteLost records a lost tunnel; called with mu held.
+func (e *EasyConnect) noteLost(err error) {
+	if !strings.Contains(err.Error(), easyconnect.ErrSessionEnded.Error()) {
+		return
+	}
+	now := time.Now()
+	e.kicks = append(slices.DeleteFunc(e.kicks, func(t time.Time) bool { return now.Sub(t) > kickWindow }), now)
+	if len(e.kicks) >= kickLimit {
+		e.kicked, e.lastError = true, errKicked
+		log.Warnln("[EasyConnect](%s) the gateway ended the session %d times in %s: the account is probably signed in elsewhere; not logging in again until reconnected", e.Name(), len(e.kicks), kickWindow)
+	}
+}
+
+// Reconnect drops the tunnel, forgets a pause for being signed in elsewhere, and logs in again.
+func (e *EasyConnect) Reconnect() {
+	e.mu.Lock()
+	e.kicked, e.kicks, e.lastError = false, nil, nil
+	if !e.connecting {
+		e.teardown()
+	}
+	e.mu.Unlock()
+	e.kick()
+}
+
+// ReconnectEasyConnect reconnects the named outbound (EasyConnect.Reconnect).
+func ReconnectEasyConnect(name string) error {
+	r, ok := easyconnect.Routers()[name]
+	if !ok {
+		return fmt.Errorf("no EasyConnect outbound named %s", name)
+	}
+	r.(*EasyConnect).Reconnect()
+	return nil
 }
 
 type EasyConnectOption struct {
@@ -64,6 +113,7 @@ type EasyConnectStatus struct {
 	Name    string               `json:"name"`
 	State   string               `json:"state"` // up, connecting, down
 	Error   string               `json:"error,omitempty"`
+	Kicked  bool                 `json:"kicked,omitempty"` // paused: the account is probably signed in elsewhere
 	Address string               `json:"address,omitempty"`
 	Routing *easyconnect.Routing `json:"routing,omitempty"`
 }
@@ -163,6 +213,14 @@ func (e *EasyConnect) handOver(to *EasyConnect) {
 	defer e.mu.Unlock()
 	e.closed = true
 	same := e.option.key() == to.option.key()
+	if same { // a reload keeps the count, and a pause for being signed in elsewhere
+		to.mu.Lock()
+		to.kicks, to.kicked = e.kicks, e.kicked
+		if e.kicked {
+			to.lastError, to.lastTry = e.lastError, e.lastTry
+		}
+		to.mu.Unlock()
+	}
 	switch {
 	case same && e.session != nil && e.session.Failed() == nil:
 		to.mu.Lock()
@@ -228,6 +286,9 @@ func (e *EasyConnect) kick() {
 // wait: thirty seconds, or ten minutes when the gateway refused the login outright (a wrong
 // password won't fix itself; a rate limit will). Called with mu held.
 func (e *EasyConnect) waiting() bool {
+	if e.kicked {
+		return true
+	}
 	if e.lastError == nil {
 		return false
 	}
@@ -256,6 +317,7 @@ func (e *EasyConnect) connect(ctx context.Context) (ipStack, resolver.Resolver, 
 			log.Warnln("[EasyConnect](%s) tunnel lost: %s", e.Name(), err)
 			e.teardown()
 			e.lastTry, e.lastError = time.Now(), fmt.Errorf("tunnel lost: %w", err)
+			e.noteLost(err)
 		}
 	}
 	if e.connecting {
@@ -374,7 +436,7 @@ func (e *EasyConnect) Routing() *easyconnect.Routing {
 func (e *EasyConnect) Status() EasyConnectStatus {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	s := EasyConnectStatus{Name: e.Name(), State: "down"}
+	s := EasyConnectStatus{Name: e.Name(), State: "down", Kicked: e.kicked}
 	switch {
 	case e.session != nil && e.session.Failed() == nil:
 		s.State, s.Address = "up", e.session.Address.String()

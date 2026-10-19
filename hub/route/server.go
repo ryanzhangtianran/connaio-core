@@ -144,6 +144,23 @@ func router(isDebug bool, secret string, dohServer string, cors Cors) *chi.Mux {
 			render.JSON(w, r, render.M{"tunnels": outbound.EasyConnectStatuses()})
 		})
 		r.Post("/easyconnect/test", easyConnectTest) // logs in with the given settings, reports what the gateway handed out, logs out
+		// {"name": …}: drops the tunnel and logs in again, also after a pause for being signed in elsewhere
+		r.Post("/easyconnect/reconnect", func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				Name string `json:"name"`
+			}
+			if err := render.DecodeJSON(r.Body, &req); err != nil {
+				render.Status(r, http.StatusBadRequest)
+				render.JSON(w, r, newError(err.Error()))
+				return
+			}
+			if err := outbound.ReconnectEasyConnect(req.Name); err != nil {
+				render.Status(r, http.StatusNotFound)
+				render.JSON(w, r, newError(err.Error()))
+				return
+			}
+			render.NoContent(w, r)
+		})
 		r.Mount("/network", networkRouter())
 		r.Post("/flush-dns", flushSystemDNS) // the system's DNS cache, by a root core on macOS
 		r.Mount("/storage", storageRouter())

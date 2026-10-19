@@ -250,7 +250,7 @@ func (g *Gateway) OpenTunnel(ctx context.Context, sending bool) (*tlsConn, error
 		_ = tls.SetDeadline(time.Time{})
 		return tls, nil
 	case first == 0x08:
-		err = errors.New("the gateway ended the session")
+		err = ErrSessionEnded
 	case first >= 0x05 && first <= 0x07, first == 0x09:
 		err = errors.New("the gateway is busy; try again")
 	default:
@@ -372,6 +372,10 @@ func (r *recordReader) Read(p []byte) (int, error) {
 	r.rest = r.rest[n:]
 	return n, nil
 }
+
+// ErrSessionEnded is the gateway closing the tunnel on its side: the session expired, or the
+// account signed in somewhere else (a gateway allows one session per account).
+var ErrSessionEnded = errors.New("the gateway ended the session")
 
 // RefusedError is a login the gateway turned down for a reason that won't change until the
 // settings do: wrong credentials, a second factor this client can't provide. Not worth retrying.
