@@ -25,6 +25,9 @@ func TestEasyConnectKicked(t *testing.T) {
 	if e.kicked || e.waiting() {
 		t.Fatalf("paused after %d kicks", len(e.kicks))
 	}
+	if st := e.Status(); st.Kicks != 2 || st.LastKick.IsZero() {
+		t.Fatalf("status reports %d kicks, last %v", st.Kicks, st.LastKick)
+	}
 	e.kicks = append([]time.Time{time.Now().Add(-kickWindow - time.Minute)}, e.kicks...) // an old one drops out
 	lose(ended)
 	if !e.kicked || !e.waiting() || !e.Status().Kicked {

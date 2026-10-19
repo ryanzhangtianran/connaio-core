@@ -119,6 +119,11 @@ type EasyConnectStatus struct {
 	Kicked  bool                 `json:"kicked,omitempty"` // paused: the account is probably signed in elsewhere
 	Address string               `json:"address,omitempty"`
 	Routing *easyconnect.Routing `json:"routing,omitempty"`
+
+	// Kicks is how often the gateway ended the session within kickWindow, the last at LastKick:
+	// once can be a timeout, again soon is likely another login on the account.
+	Kicks    int       `json:"kicks,omitempty"`
+	LastKick time.Time `json:"lastKick,omitzero"`
 }
 
 // ApplyEasyConnects runs once a config is applied: its outbounds become the live ones (the
@@ -440,6 +445,11 @@ func (e *EasyConnect) Status() EasyConnectStatus {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	s := EasyConnectStatus{Name: e.Name(), State: "down", Kicked: e.kicked}
+	for _, t := range e.kicks {
+		if time.Since(t) <= kickWindow {
+			s.Kicks, s.LastKick = s.Kicks+1, t
+		}
+	}
 	switch {
 	case e.session != nil && e.session.Failed() == nil:
 		s.State, s.Address = "up", e.session.Address.String()
