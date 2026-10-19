@@ -417,8 +417,11 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		FileDescriptor:                        options.FileDescriptor,
 		InterfaceMonitor:                      defaultInterfaceMonitor,
 		EXP_RecvMsgX:                          options.RecvMsgX,
-		EXP_SendMsgX:                          options.SendMsgX,
-		EXP_ProcessorsPerChannel:              options.ProcessorsPerChannel,
+		// no dns-hijack (process-tun clears it) keeps the system's DNS where it is: otherwise auto-route
+		// points systemd-resolved (Linux) or the adapter (Windows) at the TUN, and every app gets fake IPs
+		EXP_DisableDNSHijack:     len(options.DNSHijack) == 0,
+		EXP_SendMsgX:             options.SendMsgX,
+		EXP_ProcessorsPerChannel: options.ProcessorsPerChannel,
 	}
 
 	if options.AutoRedirect {
