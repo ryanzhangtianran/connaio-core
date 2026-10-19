@@ -9,7 +9,6 @@ import (
 	"slices"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -65,7 +64,7 @@ var errKicked = E.New("the gateway keeps ending the session: the account is prob
 
 // noteLost records a lost tunnel; called with mu held.
 func (e *EasyConnect) noteLost(err error) {
-	if !strings.Contains(err.Error(), easyconnect.ErrSessionEnded.Error()) {
+	if !errors.Is(err, easyconnect.ErrSessionEnded) {
 		return
 	}
 	now := time.Now()
