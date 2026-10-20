@@ -25,6 +25,7 @@ import (
 	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/ntp"
 	"github.com/metacubex/mihomo/transport/easyconnect"
+	"github.com/metacubex/mihomo/tunnel"
 	"github.com/metacubex/mihomo/tunnel/statistic"
 
 	"github.com/metacubex/chi"
@@ -142,6 +143,12 @@ func router(isDebug bool, secret string, dohServer string, cors Cors) *chi.Mux {
 		r.Mount("/reverse-tunnels", reverseTunnelRouter())
 		r.Get("/easyconnect", func(w http.ResponseWriter, r *http.Request) { // every EasyConnect outbound: tunnel state, address, what the gateway routes
 			render.JSON(w, r, render.M{"tunnels": outbound.EasyConnectStatuses()})
+		})
+		// every Tailscale outbound: state, the login link while it needs one, its tailnet addresses
+		r.Get("/tailscale", func(w http.ResponseWriter, r *http.Request) {
+			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+			defer cancel()
+			render.JSON(w, r, render.M{"tunnels": outbound.TailscaleStatuses(ctx, tunnel.Proxies())})
 		})
 		r.Post("/easyconnect/test", easyConnectTest) // logs in with the given settings, reports what the gateway handed out, logs out
 		// {"name": …}: drops the tunnel and logs in again, also after a pause for being signed in elsewhere

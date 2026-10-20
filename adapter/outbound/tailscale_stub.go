@@ -2,7 +2,10 @@
 
 package outbound
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 type Tailscale struct {
 	*Base
@@ -25,4 +28,8 @@ type TailscaleOption struct {
 
 func NewTailscale(option TailscaleOption) (*Tailscale, error) {
 	return nil, fmt.Errorf("tailscale support is disabled by \"no_tailscale\" build tag or not include \"with_gvisor\" build tag")
+}
+
+func (t *Tailscale) Status(context.Context) TailscaleStatus {
+	return TailscaleStatus{Name: t.Name(), Error: "tailscale support is not built in"}
 }
