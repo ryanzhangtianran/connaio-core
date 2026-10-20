@@ -17,7 +17,11 @@ type TailscaleStatus struct {
 	// Routes are the subnets the tailnet's other nodes advertise (and the admin approved), each with
 	// the node that serves it; reaching one needs accept-routes
 	Routes []TailscaleRoute `json:"routes,omitempty"`
-	Error  string           `json:"error,omitempty"`
+	// Latency is a Tailscale ping's round trip in ms to the exit node, else to a node in the
+	// tailnet (one serving subnets first): what the node is for, a URL test reaching nothing
+	// beyond the tailnet without an exit node; 0 when no node answered.
+	Latency int    `json:"latency,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 // TailscaleRoute is one advertised subnet and the node behind it.
