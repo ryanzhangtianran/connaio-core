@@ -172,10 +172,15 @@ func unwrapEasyConnect(p C.Proxy) (*EasyConnect, bool) {
 	}
 }
 
+// EasyConnectStatuses reports every EasyConnect outbound and starts the login of one that is down
+// (kick waits out its backoff and a pause): a configured tunnel stays up while a client watches it,
+// rules that only name some of its routes or none (the routes being known only after a login) or not.
 func EasyConnectStatuses() []EasyConnectStatus {
 	var statuses []EasyConnectStatus
 	for _, e := range easyconnect.Routers() {
-		statuses = append(statuses, e.(*EasyConnect).Status())
+		ec := e.(*EasyConnect)
+		statuses = append(statuses, ec.Status())
+		ec.kick()
 	}
 	sort.Slice(statuses, func(i, j int) bool { return statuses[i].Name < statuses[j].Name })
 	return statuses
