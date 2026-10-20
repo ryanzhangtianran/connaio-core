@@ -44,6 +44,7 @@ const (
 	ProcessAncestorPath
 	CaptureFilter
 	EasyConnectRule
+	SystemDNS
 )
 
 type RuleType int
@@ -130,6 +131,8 @@ func (rt RuleType) String() string {
 		return "ProcessAncestorPath"
 	case CaptureFilter:
 		return "CaptureFilter"
+	case SystemDNS:
+		return "SystemDNS"
 	default:
 		return "Unknown"
 	}

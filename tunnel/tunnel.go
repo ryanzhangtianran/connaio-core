@@ -475,6 +475,9 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 		helper.FindProcess = nil
 	}
 
+	if matched, _ := (systemDNS{}).Match(metadata, helper); matched {
+		return proxies["DIRECT"], systemDNS{}, nil
+	}
 	switch mode {
 	case Direct:
 		proxy = proxies["DIRECT"]
