@@ -222,7 +222,11 @@ type Metadata struct {
 	SpecialProxy string     `json:"specialProxy"`
 	SpecialRules string     `json:"specialRules"`
 	RemoteDst    string     `json:"remoteDestination"`
-	DSCP         uint8      `json:"dscp"`
+	// OutboundLocal is the dialed connection's own end when it stays on this machine: one that reaches
+	// the core's own inbound (a reverse tunnel's DIRECT to the mixed port) comes back from there as
+	// the source, which ties the two together
+	OutboundLocal string `json:"outboundLocal,omitempty"`
+	DSCP          uint8  `json:"dscp"`
 
 	// the executables of the process's ancestors, nearest first, read when the connection opened:
 	// a short-lived command's chain is gone by the time a client could look it up
