@@ -40,6 +40,11 @@ const (
 	AND
 	OR
 	NOT
+	ProcessAncestor
+	ProcessAncestorPath
+	CaptureFilter
+	EasyConnectRule
+	SystemDNS
 )
 
 type RuleType int
@@ -102,6 +107,8 @@ func (rt RuleType) String() string {
 		return "RematchName"
 	case MATCH:
 		return "Match"
+	case EasyConnectRule:
+		return "EasyConnect"
 	case RuleSet:
 		return "RuleSet"
 	case Network:
@@ -118,6 +125,14 @@ func (rt RuleType) String() string {
 		return "OR"
 	case NOT:
 		return "NOT"
+	case ProcessAncestor:
+		return "ProcessAncestor"
+	case ProcessAncestorPath:
+		return "ProcessAncestorPath"
+	case CaptureFilter:
+		return "CaptureFilter"
+	case SystemDNS:
+		return "SystemDNS"
 	default:
 		return "Unknown"
 	}

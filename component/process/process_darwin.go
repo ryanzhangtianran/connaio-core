@@ -33,7 +33,7 @@ var structSize = func() int {
 	}
 }()
 
-func findProcessName(network string, ip netip.Addr, port int) (uint32, string, error) {
+func findProcess(network string, ip netip.Addr, port int) (uint32, uint32, string, error) {
 	var spath string
 	switch network {
 	case TCP:
@@ -41,14 +41,14 @@ func findProcessName(network string, ip netip.Addr, port int) (uint32, string, e
 	case UDP:
 		spath = "net.inet.udp.pcblist_n"
 	default:
-		return 0, "", ErrInvalidNetwork
+		return 0, 0, "", ErrInvalidNetwork
 	}
 
 	isIPv4 := ip.Is4()
 
 	value, err := unix.SysctlRaw(spath)
 	if err != nil {
-		return 0, "", err
+		return 0, 0, "", err
 	}
 
 	buf := value
@@ -58,7 +58,10 @@ func findProcessName(network string, ip netip.Addr, port int) (uint32, string, e
 		itemSize += 208
 	}
 
-	var fallbackUDPProcess string
+	var (
+		fallbackUDPProcess string
+		fallbackUDPPid     uint32
+	)
 	// skip the first xinpgen(24 bytes) block
 	for i := 24; i+itemSize <= len(buf); i += itemSize {
 		// offset of xinpcb_n and xsocket_n
@@ -93,20 +96,34 @@ func findProcessName(network string, ip netip.Addr, port int) (uint32, string, e
 			// xsocket_n.so_last_pid
 			pid := readNativeUint32(buf[so+68 : so+72])
 			pp, err := getExecPathFromPID(pid)
-			return 0, pp, err
+			return 0, pid, pp, err
 		}
 
 		// udp packet connection may be not equal with srcIP
 		if network == UDP && srcIP.IsUnspecified() && isIPv4 == srcIsIPv4 {
-			fallbackUDPProcess, _ = getExecPathFromPID(readNativeUint32(buf[so+68 : so+72]))
+			fallbackUDPPid = readNativeUint32(buf[so+68 : so+72])
+			fallbackUDPProcess, _ = getExecPathFromPID(fallbackUDPPid)
 		}
 	}
 
 	if network == UDP && fallbackUDPProcess != "" {
-		return 0, fallbackUDPProcess, nil
+		return 0, fallbackUDPPid, fallbackUDPProcess, nil
 	}
 
-	return 0, "", ErrNotFound
+	return 0, 0, "", ErrNotFound
+}
+
+func parentProcess(pid uint32) (uint32, string, error) {
+	kp, err := unix.SysctlKinfoProc("kern.proc.pid", int(pid))
+	if err != nil {
+		return 0, "", err
+	}
+	ppid := uint32(kp.Eproc.Ppid)
+	if ppid <= 1 {
+		return ppid, "", nil
+	}
+	path, err := getExecPathFromPID(ppid)
+	return ppid, path, err
 }
 
 func getExecPathFromPID(pid uint32) (string, error) {

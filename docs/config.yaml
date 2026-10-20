@@ -25,6 +25,17 @@ lan-disallowed-ips: # 禁止连接的 IP 地址段，黑名单优先级高于白
 #  - off, 不匹配进程，推荐在路由器上使用此模式
 find-process-mode: strict
 
+# 流量接入方式（Connaio）：不填则沿用 tun.enable
+capture:
+  # system-proxy: 关闭 TUN，由 GUI 把系统代理指向 mixed-port（内核不改系统设置）
+  # tun:          开启 TUN，全部流量按规则
+  # process-tun:  开启 TUN，仅 processes 中的进程及其子进程按规则，其余 TUN 流量直连（global 模式下同样直连）；
+  #               macOS 无法按进程分路由，其他应用的流量仍经过内核，只是直接放行。
+  #               DNS 不劫持（应用经 mDNSResponder/resolved 解析，无法按进程区分），各应用拿真实 IP；
+  #               自动开启 sniffer 从 TLS/HTTP/QUIC 还原域名供规则匹配
+  mode: process-tun
+  processes: [ghostty]
+
 mode: rule
 
 #自定义 geodata url
@@ -245,6 +256,36 @@ tunnels: # one line config
     target: target.com
     proxy: proxy
 
+# 反向隧道：把本地服务暴露到远端服务器，配置重载时只重启有变化的条目
+# 反代进来的流量按规则分流：IN-TYPE 为 FRP 或 SSH，IN-NAME 为隧道名，SRC-IP 为远端用户地址，
+# 目标是 frp 的 localIP:localPort（tcp/udp 类代理）或 ssh 的 local；frp 插件（plugin）不经过规则
+# 本地服务通常需要直连规则，如 IN-NAME,home-nas,DIRECT
+# 运行状态：GET /reverse-tunnels（state 为 connecting/running/retrying，frp 附带每个代理的状态与远端地址）
+reverse-tunnels:
+  # frpc，config 为原生 frpc v1 配置（字段与 frpc.toml/yaml 相同，驼峰命名）
+  - name: home-nas
+    type: frp
+    dialer-proxy: proxy # 可选，连接 frps 时经过的代理或代理组；不填则直连
+    config:
+      serverAddr: frps.example.com
+      serverPort: 7000
+      auth: { token: xxx }
+      # transport.protocol 为 quic/kcp 时不支持 dialer-proxy；未显式配置 transport.proxyURL 时忽略 $http_proxy
+      proxies:
+        - { name: nas-web, type: tcp, localIP: 127.0.0.1, localPort: 5000, remotePort: 15000 }
+  # ssh -R，认证字段同 ssh 代理
+  - name: vps
+    type: ssh
+    server: vps.example.com
+    port: 22
+    username: root
+    private-key: id_ed25519 # 相对配置目录的路径，或直接填写私钥内容
+    # host-key: ["ssh-ed25519 AAAA..."]
+    dialer-proxy: proxy # 可选
+    forwards:
+      - remote: 0.0.0.0:8080 # 远端监听地址，非 127.0.0.1 需要 sshd 开启 GatewayPorts
+        local: 127.0.0.1:80 # 按规则分流的目标
+
 # DNS 配置
 dns:
   cache-algorithm: arc
@@ -294,6 +335,9 @@ dns:
   fake-ip-ttl: 1
 
   # use-hosts: true # 查询 hosts
+  # 跟随系统的分域名 DNS（公司 VPN、Tailscale MagicDNS 等）：这些域名交给系统指定的服务器（绑定其网卡）解析，
+  # 并排除在 fake-ip 之外，使流量走系统路由（VPN）。来源 macOS scutil --dns、Linux resolvectl；每 30 秒检测变化
+  # use-system-resolvers: true
 
   # 配置后面的nameserver、fallback和nameserver-policy向dns服务器的连接过程是否遵守遵守rules规则
   # 如果为false（默认值）则这三部分的dns服务器在未特别指定的情况下会直连
@@ -1998,6 +2042,11 @@ rules:
   - DOMAIN-WILDCARD,test.*.mihomo.com,ss1
   - IP-CIDR,1.1.1.1/32,ss1
   - IP-CIDR6,2409::/64,DIRECT
+  # 进程自身或任一父进程的可执行文件名/路径匹配（macOS、Linux），如终端里启动的所有程序；
+  # 依赖进程查找（find-process-mode 不能为 off）。tmux 等守护进程会断开进程链
+  - AND,((PROCESS-ANCESTOR,ghostty),(PROCESS-NAME,claude)),ss1
+  - PROCESS-ANCESTOR,ghostty,ss1
+  - PROCESS-ANCESTOR-PATH,/Applications/Ghostty.app/Contents/MacOS/ghostty,ss1
   # 当满足条件是 TCP 或 UDP 流量时，使用名为 sub-rule-name1 的规则集
   - SUB-RULE,(OR,((NETWORK,TCP),(NETWORK,UDP))),sub-rule-name1
   - SUB-RULE,(AND,((NETWORK,UDP))),sub-rule-name2

@@ -407,6 +407,9 @@ func (p *autoCloseProxyAdapter) Close() error {
 	return p.closeErr
 }
 
+// Inner is the adapter this wrapper closes.
+func (p *autoCloseProxyAdapter) Inner() ProxyAdapter { return p.ProxyAdapter }
+
 func NewAutoCloseProxyAdapter(adapter ProxyAdapter) ProxyAdapter {
 	proxy := &autoCloseProxyAdapter{
 		ProxyAdapter: adapter,

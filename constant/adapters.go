@@ -30,6 +30,7 @@ const (
 	Fallback
 	URLTest
 	LoadBalance
+	Subnet
 
 	Shadowsocks
 	ShadowsocksR
@@ -55,6 +56,7 @@ const (
 	ZeroTier
 	EasyTier
 	GostRelay
+	EasyConnect
 )
 
 const (
@@ -242,6 +244,8 @@ func (at AdapterType) String() string {
 		return "EasyTier"
 	case GostRelay:
 		return "GostRelay"
+	case EasyConnect:
+		return "EasyConnect"
 	case Relay:
 		return "Relay"
 	case Selector:
@@ -252,6 +256,8 @@ func (at AdapterType) String() string {
 		return "URLTest"
 	case LoadBalance:
 		return "LoadBalance"
+	case Subnet:
+		return "Subnet"
 	default:
 		return "Unknown"
 	}

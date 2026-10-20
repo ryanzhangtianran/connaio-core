@@ -25,7 +25,9 @@ import (
 	"github.com/metacubex/mihomo/component/geodata"
 	"github.com/metacubex/mihomo/component/process"
 	"github.com/metacubex/mihomo/component/resolver"
+	"github.com/metacubex/mihomo/component/reverse"
 	"github.com/metacubex/mihomo/component/sniffer"
+	"github.com/metacubex/mihomo/component/sysdns"
 	"github.com/metacubex/mihomo/component/trie"
 	C "github.com/metacubex/mihomo/constant"
 	P "github.com/metacubex/mihomo/constant/provider"
@@ -151,6 +153,7 @@ type DNS struct {
 	IPv6Timeout           uint
 	UseHosts              bool
 	UseSystemHosts        bool
+	UseSystemResolvers    bool
 	NameServer            []dns.NameServer
 	Fallback              []dns.NameServer
 	FallbackIPFilter      []C.IpMatcher
@@ -193,24 +196,26 @@ type TLS struct {
 
 // Config is mihomo config manager
 type Config struct {
-	General       *General
-	Controller    *Controller
-	Experimental  *Experimental
-	IPTables      *IPTables
-	NTP           *NTP
-	DNS           *DNS
-	Hosts         *trie.DomainTrie[resolver.HostValue]
-	Profile       *Profile
-	Rules         []C.Rule
-	SubRules      map[string][]C.Rule
-	Users         []auth.AuthUser
-	Proxies       map[string]C.Proxy
-	Listeners     map[string]C.InboundListener
-	Providers     map[string]P.ProxyProvider
-	RuleProviders map[string]P.RuleProvider
-	Tunnels       []LC.Tunnel
-	Sniffer       *sniffer.Config
-	TLS           *TLS
+	General        *General
+	Controller     *Controller
+	Experimental   *Experimental
+	IPTables       *IPTables
+	NTP            *NTP
+	DNS            *DNS
+	Hosts          *trie.DomainTrie[resolver.HostValue]
+	Profile        *Profile
+	Rules          []C.Rule
+	SubRules       map[string][]C.Rule
+	Users          []auth.AuthUser
+	Proxies        map[string]C.Proxy
+	Listeners      map[string]C.InboundListener
+	Providers      map[string]P.ProxyProvider
+	RuleProviders  map[string]P.RuleProvider
+	Tunnels        []LC.Tunnel
+	ReverseTunnels []*reverse.Tunnel
+	Capture        RawCapture
+	Sniffer        *sniffer.Config
+	TLS            *TLS
 }
 
 type RawCors struct {
@@ -225,6 +230,7 @@ type RawDNS struct {
 	IPv6Timeout                  uint                                `yaml:"ipv6-timeout" json:"ipv6-timeout"`
 	UseHosts                     bool                                `yaml:"use-hosts" json:"use-hosts"`
 	UseSystemHosts               bool                                `yaml:"use-system-hosts" json:"use-system-hosts"`
+	UseSystemResolvers           bool                                `yaml:"use-system-resolvers" json:"use-system-resolvers"`
 	RespectRules                 bool                                `yaml:"respect-rules" json:"respect-rules"`
 	NameServer                   []string                            `yaml:"nameserver" json:"nameserver"`
 	Fallback                     []string                            `yaml:"fallback" json:"fallback"`
@@ -434,6 +440,8 @@ type RawConfig struct {
 	Interface                     string                  `yaml:"interface-name" json:"interface-name"`
 	RoutingMark                   int                     `yaml:"routing-mark" json:"routing-mark"`
 	Tunnels                       []LC.Tunnel             `yaml:"tunnels" json:"tunnels"`
+	ReverseTunnels                []map[string]any        `yaml:"reverse-tunnels" json:"reverse-tunnels"`
+	Capture                       RawCapture              `yaml:"capture" json:"capture"`
 	GeoAutoUpdate                 bool                    `yaml:"geo-auto-update" json:"geo-auto-update"`
 	GeoUpdateInterval             int                     `yaml:"geo-update-interval" json:"geo-update-interval"`
 	GeodataMode                   bool                    `yaml:"geodata-mode" json:"geodata-mode"`
@@ -726,6 +734,12 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 		return nil, err
 	}
 
+	config.Capture = rawCfg.Capture
+	config.Rules, err = parseCapture(rawCfg, config.General, config.Rules)
+	if err != nil {
+		return nil, err
+	}
+
 	err = parseTuicServer(rawCfg.TuicServer, config.General)
 	if err != nil {
 		return nil, err
@@ -743,6 +757,11 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 		}
 	}
 
+	config.ReverseTunnels, err = parseReverseTunnels(rawCfg.ReverseTunnels, config.Proxies)
+	if err != nil {
+		return nil, err
+	}
+
 	config.Sniffer, err = parseSniffer(rawCfg.Sniffer, ruleProviders)
 	if err != nil {
 		return nil, err
@@ -756,6 +775,83 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 
 //go:linkname temporaryUpdateGeneral
 func temporaryUpdateGeneral(general *General) func()
+
+// Capture modes: how traffic reaches mihomo. Empty keeps tun.enable as configured and leaves the system proxy alone.
+const (
+	CaptureSystemProxy = "system-proxy" // TUN off; the GUI points the OS proxy at mixed-port
+	CaptureTun         = "tun"          // TUN captures all traffic
+	CaptureProcessTun  = "process-tun"  // TUN on; only capture.processes (and descendants) follow the rules, the rest goes DIRECT
+)
+
+// processTunSniff is the sniffer used by process-tun, which leaves DNS alone and recovers domains from traffic.
+var processTunSniff = map[string]RawSniffingConfig{
+	"HTTP": {Ports: []string{"80", "8080-8880"}},
+	"TLS":  {Ports: []string{"443", "8443"}},
+	"QUIC": {Ports: []string{"443", "8443"}},
+}
+
+type RawCapture struct {
+	Mode      string   `yaml:"mode" json:"mode"`
+	Processes []string `yaml:"processes" json:"processes,omitempty"`
+}
+
+// parseCapture applies capture.mode on top of the tun section, sniffer and rules; it runs before parseSniffer.
+func parseCapture(rawCfg *RawConfig, general *General, rules []C.Rule) ([]C.Rule, error) {
+	raw := rawCfg.Capture
+	switch raw.Mode {
+	case "":
+	case CaptureSystemProxy:
+		if general.MixedPort == 0 {
+			return nil, errors.New("capture.mode system-proxy needs mixed-port")
+		}
+		general.Tun.Enable = false
+	case CaptureTun:
+		general.Tun.Enable = true
+	case CaptureProcessTun:
+		if len(raw.Processes) == 0 {
+			return nil, errors.New("capture.mode process-tun needs capture.processes")
+		}
+		if general.FindProcessMode == process.FindProcessOff {
+			return nil, errors.New("capture.mode process-tun needs find-process-mode other than off")
+		}
+		general.Tun.Enable = true
+		// Apps resolve through mDNSResponder / systemd-resolved, so DNS can't be told apart per process:
+		// leave it to the system (other apps keep real IPs) and sniff domains for the captured ones.
+		general.Tun.DNSHijack = nil
+		if !rawCfg.Sniffer.Enable {
+			rawCfg.Sniffer.Enable = true
+			if len(rawCfg.Sniffer.Sniff) == 0 && len(rawCfg.Sniffer.Sniffing) == 0 {
+				rawCfg.Sniffer.Sniff = processTunSniff
+			}
+		}
+		rules = append([]C.Rule{RC.NewCaptureFilter(raw.Processes)}, rules...)
+	default:
+		return nil, fmt.Errorf("unknown capture.mode %q", raw.Mode)
+	}
+	return rules, nil
+}
+
+func parseReverseTunnels(rawTunnels []map[string]any, proxies map[string]C.Proxy) ([]*reverse.Tunnel, error) {
+	tunnels := make([]*reverse.Tunnel, 0, len(rawTunnels))
+	names := map[string]struct{}{}
+	for idx, mapping := range rawTunnels {
+		t, err := reverse.Parse(mapping, T.Tunnel)
+		if err != nil {
+			return nil, fmt.Errorf("reverse tunnel %d: %w", idx, err)
+		}
+		if _, ok := names[t.Name]; ok {
+			return nil, fmt.Errorf("reverse tunnel %s is duplicated", t.Name)
+		}
+		names[t.Name] = struct{}{}
+		if t.DialerProxy != "" {
+			if _, ok := proxies[t.DialerProxy]; !ok {
+				return nil, fmt.Errorf("reverse tunnel %s dialer-proxy %s not found", t.Name, t.DialerProxy)
+			}
+		}
+		tunnels = append(tunnels, t)
+	}
+	return tunnels, nil
+}
 
 func parseGeneral(cfg *RawConfig) (*General, error) {
 	if cfg.GlobalClientFingerprint != "" {
@@ -1336,6 +1432,38 @@ func parsePureDNSServer(server string) string {
 	}
 }
 
+// WithSystemResolvers returns a copy of c that also sends each OS split-DNS domain (VPN, Tailscale
+// MagicDNS) to its own resolver and keeps it out of fake-ip, so its traffic follows the OS's routes.
+// User nameserver-policy entries come first and win. Fake-ip exclusion applies to the default
+// blacklist filter mode; whitelist mode already gives real IPs, rule mode is left to the user.
+func (c *DNS) WithSystemResolvers(resolvers []sysdns.Resolver) *DNS {
+	if !c.UseSystemResolvers || len(resolvers) == 0 {
+		return c
+	}
+	d := *c
+	d.NameServerPolicy = slices.Clone(c.NameServerPolicy)
+	all := &trie.DomainSetBuilder{}
+	for _, r := range resolvers {
+		nameservers, err := parseNameServer(r.Nameservers, false, false)
+		if err != nil {
+			log.Warnln("[DNS] skip system resolver for %v: %v", r.Domains, err)
+			continue
+		}
+		domains := &trie.DomainSetBuilder{}
+		for _, domain := range r.Domains {
+			_ = domains.Insert("+." + domain)
+			_ = all.Insert("+." + domain)
+		}
+		d.NameServerPolicy = append(d.NameServerPolicy, dns.Policy{Domain: strings.Join(r.Domains, ","), Matcher: domains.Build(), NameServers: nameservers})
+	}
+	if s := c.FakeIPSkipper; s != nil && s.Mode == C.FilterBlackList && len(s.Rules) == 0 && !all.IsEmpty() {
+		skipper := *s
+		skipper.Host = append(slices.Clone(s.Host), all.Build())
+		d.FakeIPSkipper = &skipper
+	}
+	return &d
+}
+
 func parseNameServerPolicy(nsPolicy *orderedmap.OrderedMap[string, any], adapterName string, ruleProviders map[string]P.RuleProvider, respectRules bool, preferH3 bool) ([]dns.Policy, error) {
 	var policy []dns.Policy
 
@@ -1422,17 +1550,18 @@ func parseDNS(rawCfg *RawConfig, ruleProviders map[string]P.RuleProvider) (*DNS,
 	}
 
 	dnsCfg := &DNS{
-		Enable:            cfg.Enable,
-		Listen:            cfg.Listen,
-		ListenRoutingMark: cfg.ListenRoutingMark,
-		PreferH3:          cfg.PreferH3,
-		IPv6Timeout:       cfg.IPv6Timeout,
-		IPv6:              cfg.IPv6,
-		UseHosts:          cfg.UseHosts,
-		UseSystemHosts:    cfg.UseSystemHosts,
-		EnhancedMode:      cfg.EnhancedMode,
-		CacheAlgorithm:    cfg.CacheAlgorithm,
-		CacheMaxSize:      cfg.CacheMaxSize,
+		Enable:             cfg.Enable,
+		Listen:             cfg.Listen,
+		ListenRoutingMark:  cfg.ListenRoutingMark,
+		PreferH3:           cfg.PreferH3,
+		IPv6Timeout:        cfg.IPv6Timeout,
+		IPv6:               cfg.IPv6,
+		UseHosts:           cfg.UseHosts,
+		UseSystemHosts:     cfg.UseSystemHosts,
+		UseSystemResolvers: cfg.UseSystemResolvers,
+		EnhancedMode:       cfg.EnhancedMode,
+		CacheAlgorithm:     cfg.CacheAlgorithm,
+		CacheMaxSize:       cfg.CacheMaxSize,
 	}
 	var err error
 	if dnsCfg.NameServer, err = parseNameServer(cfg.NameServer, cfg.RespectRules, cfg.PreferH3); err != nil {

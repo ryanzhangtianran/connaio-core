@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/metacubex/mihomo/common/cmd"
 	"github.com/metacubex/mihomo/component/age"
@@ -74,10 +75,38 @@ func init() {
 	flag.BoolVar(&geodataMode, "m", false, "set geodata mode")
 	flag.BoolVar(&version, "v", false, "show current version of mihomo")
 	flag.BoolVar(&testConfig, "t", false, "test configuration and exit")
+	flag.BoolVar(&exitWithParent, "exit-with-parent", false, "shut down when the parent process is gone, restoring routes and listeners")
 	flag.Parse()
 }
 
+// stopSign is closed when the Windows service manager asks the core to stop (main_windows.go), or
+// the parent that started this core is gone (-exit-with-parent).
+var stopSign = make(chan struct{})
+
+var exitWithParent bool
+
+// watchParent closes stopSign once the parent process is gone: a GUI that crashed or was killed
+// must not leave a core holding the TUN and the system's routes.
+func watchParent() {
+	parent := os.Getppid()
+	for range time.Tick(2 * time.Second) {
+		if os.Getppid() != parent || parent == 1 { // 1: already orphaned before the first look
+			log.Warnln("parent process %d is gone, shutting down", parent)
+			close(stopSign)
+			return
+		}
+	}
+}
+
 func main() {
+	if runAsService() {
+		return
+	}
+	run()
+}
+
+// run is the core's whole life: it returns on SIGTERM, SIGINT or a service stop.
+func run() {
 	// Defensive programming: panic when code mistakenly calls net.DefaultResolver
 	net.DefaultResolver.PreferGo = true
 	net.DefaultResolver.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -129,6 +158,7 @@ func main() {
 			homeDir = filepath.Join(currentDir, homeDir)
 		}
 		C.SetHomeDir(homeDir)
+		_ = os.MkdirAll(homeDir, 0o755) // -config skips config.Init, which would make it; the cache and socket go here
 	}
 
 	if geodataMode {
@@ -172,16 +202,20 @@ func main() {
 		}
 	}
 
+	if exitWithParent {
+		go watchParent()
+	}
+
 	if testConfig {
 		if len(configBytes) != 0 {
 			if _, err := executor.ParseWithBytes(configBytes); err != nil {
-				log.Errorln(err.Error())
+				log.Errorln("%s", err)
 				fmt.Println("configuration test failed")
 				os.Exit(1)
 			}
 		} else {
 			if _, err := executor.Parse(); err != nil {
-				log.Errorln(err.Error())
+				log.Errorln("%s", err)
 				fmt.Printf("configuration file %s test failed\n", C.Path.Config())
 				os.Exit(1)
 			}
@@ -243,6 +277,8 @@ func main() {
 	for {
 		select {
 		case <-termSign:
+			return
+		case <-stopSign:
 			return
 		case <-hupSign:
 			if err := hub.Parse(configBytes, options...); err != nil {

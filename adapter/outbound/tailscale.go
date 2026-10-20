@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -22,9 +23,11 @@ import (
 	"github.com/metacubex/mihomo/log"
 
 	ts "github.com/metacubex/tailscale"
+	"github.com/metacubex/tailscale/client/local"
 	"github.com/metacubex/tailscale/envknob"
 	"github.com/metacubex/tailscale/hostinfo"
 	"github.com/metacubex/tailscale/ipn"
+	"github.com/metacubex/tailscale/ipn/ipnstate"
 	"github.com/metacubex/tailscale/net/netmon"
 	"github.com/metacubex/tailscale/tailcfg"
 	"github.com/metacubex/tailscale/tsnet"
@@ -208,6 +211,72 @@ func (t *Tailscale) ensureStarted(ctx context.Context) error {
 		return err
 	}
 	return t.waitBackendInitialized(ctx)
+}
+
+// Status starts the outbound if it hasn't started and reads its state and login link.
+func (t *Tailscale) Status(ctx context.Context) TailscaleStatus {
+	s := TailscaleStatus{Name: t.Name()}
+	if err := t.ensureStarted(ctx); err != nil {
+		s.Error = err.Error()
+		return s
+	}
+	lc, err := t.server.LocalClient()
+	if err != nil {
+		s.Error = err.Error()
+		return s
+	}
+	st, err := lc.Status(ctx)
+	if err != nil {
+		s.Error = err.Error()
+		return s
+	}
+	s.State, s.AuthURL = st.BackendState, st.AuthURL
+	for _, ip := range st.TailscaleIPs {
+		s.IPs = append(s.IPs, ip.String())
+	}
+	for _, p := range st.Peer {
+		if p.PrimaryRoutes == nil {
+			continue
+		}
+		for _, r := range p.PrimaryRoutes.All() {
+			if r.Bits() == 0 { // an exit node's default route: not a subnet
+				continue
+			}
+			s.Routes = append(s.Routes, TailscaleRoute{Prefix: r.String(), Node: p.HostName, Online: p.Online})
+		}
+	}
+	slices.SortFunc(s.Routes, func(a, b TailscaleRoute) int { return strings.Compare(a.Prefix, b.Prefix) })
+	if st.BackendState == ipn.Running.String() {
+		s.Latency = t.pingPeer(ctx, lc, st)
+	}
+	return s
+}
+
+// pingPeer is a Tailscale (disco) ping's round trip in ms to the exit node, else to an online
+// node, one serving subnets first; 0 when none answers within 3s.
+func (t *Tailscale) pingPeer(ctx context.Context, lc *local.Client, st *ipnstate.Status) int {
+	var target *ipnstate.PeerStatus
+	for _, p := range st.Peer {
+		if !p.Online || len(p.TailscaleIPs) == 0 {
+			continue
+		}
+		switch {
+		case p.ExitNode:
+			target = p
+		case target == nil, !target.ExitNode && target.PrimaryRoutes == nil && p.PrimaryRoutes != nil:
+			target = p
+		}
+	}
+	if target == nil {
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	r, err := lc.Ping(ctx, target.TailscaleIPs[0], tailcfg.PingDisco)
+	if err != nil || r.Err != "" {
+		return 0
+	}
+	return max(1, int(r.LatencySeconds*1000+0.5))
 }
 
 func (t *Tailscale) watchBackendState() {

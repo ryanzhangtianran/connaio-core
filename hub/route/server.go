@@ -7,19 +7,25 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/metacubex/mihomo/adapter/inbound"
+	"github.com/metacubex/mihomo/adapter/outbound"
 	"github.com/metacubex/mihomo/common/utils"
 	"github.com/metacubex/mihomo/component/ca"
+	"github.com/metacubex/mihomo/component/dialer"
 	"github.com/metacubex/mihomo/component/ech"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/ntp"
+	"github.com/metacubex/mihomo/transport/easyconnect"
+	"github.com/metacubex/mihomo/tunnel"
 	"github.com/metacubex/mihomo/tunnel/statistic"
 
 	"github.com/metacubex/chi"
@@ -134,6 +140,36 @@ func router(isDebug bool, secret string, dohServer string, cors Cors) *chi.Mux {
 		r.Mount("/providers/rules", ruleProviderRouter())
 		r.Mount("/cache", cacheRouter())
 		r.Mount("/dns", dnsRouter())
+		r.Mount("/reverse-tunnels", reverseTunnelRouter())
+		r.Get("/easyconnect", func(w http.ResponseWriter, r *http.Request) { // every EasyConnect outbound: tunnel state, address, what the gateway routes
+			render.JSON(w, r, render.M{"tunnels": outbound.EasyConnectStatuses()})
+		})
+		// every Tailscale outbound: state, the login link while it needs one, its tailnet addresses
+		r.Get("/tailscale", func(w http.ResponseWriter, r *http.Request) {
+			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+			defer cancel()
+			render.JSON(w, r, render.M{"tunnels": outbound.TailscaleStatuses(ctx, tunnel.Proxies())})
+		})
+		r.Post("/easyconnect/test", easyConnectTest) // logs in with the given settings, reports what the gateway handed out, logs out
+		// {"name": …}: drops the tunnel and logs in again, also after a pause for being signed in elsewhere
+		r.Post("/easyconnect/reconnect", func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				Name string `json:"name"`
+			}
+			if err := render.DecodeJSON(r.Body, &req); err != nil {
+				render.Status(r, http.StatusBadRequest)
+				render.JSON(w, r, newError(err.Error()))
+				return
+			}
+			if err := outbound.ReconnectEasyConnect(req.Name); err != nil {
+				render.Status(r, http.StatusNotFound)
+				render.JSON(w, r, newError(err.Error()))
+				return
+			}
+			render.NoContent(w, r)
+		})
+		r.Mount("/network", networkRouter())
+		r.Post("/flush-dns", flushSystemDNS) // the system's DNS cache, by a root core on macOS
 		r.Mount("/storage", storageRouter())
 		if !embedMode { // disallow restart in embed mode
 			r.Mount("/restart", restartRouter())
@@ -283,7 +319,18 @@ func startUnix(cfg *Config) {
 			log.Errorln("External controller unix listen error: %s", err)
 			return
 		}
-		_ = os.Chmod(addr, 0o666)
+		// CONNAIO_SOCKET_UID hands a root daemon's socket to the one user its GUI runs as;
+		// CONNAIO_SOCKET_GROUP to a group (admin on macOS: users who could become root anyway).
+		if uid, err := strconv.Atoi(os.Getenv("CONNAIO_SOCKET_UID")); err == nil {
+			_ = os.Chown(addr, uid, -1)
+			_ = os.Chmod(addr, 0o600)
+		} else if g, err := user.LookupGroup(os.Getenv("CONNAIO_SOCKET_GROUP")); err == nil {
+			gid, _ := strconv.Atoi(g.Gid)
+			_ = os.Chown(addr, -1, gid)
+			_ = os.Chmod(addr, 0o660)
+		} else {
+			_ = os.Chmod(addr, 0o666)
+		}
 		log.Infoln("RESTful API unix listening at: %s", l.Addr().String())
 
 		server := &http.Server{
@@ -570,5 +617,39 @@ func getLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func version(w http.ResponseWriter, r *http.Request) {
-	render.JSON(w, r, render.M{"meta": C.Meta, "version": C.Version})
+	render.JSON(w, r, render.M{"meta": C.Meta, "version": C.Version, "connaio": C.ConnaioAPI})
+}
+
+// easyConnectTest tries a login with settings that aren't in the config yet: the GUI's VPN page
+// tests before it saves. The session is closed right away, since the gateway allows one per account.
+func easyConnectTest(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Server     string `json:"server"`
+		Port       int    `json:"port"`
+		Username   string `json:"username"`
+		Password   string `json:"password"`
+		TOTPSecret string `json:"totp-secret"`
+	}
+	if err := render.DecodeJSON(r.Body, &req); err != nil || req.Server == "" {
+		render.Status(r, http.StatusBadRequest)
+		render.JSON(w, r, ErrBadRequest)
+		return
+	}
+	if req.Port == 0 {
+		req.Port = 443
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
+	defer cancel()
+	addr := net.JoinHostPort(req.Server, strconv.Itoa(req.Port))
+	gw := easyconnect.NewGateway(req.Server, req.Port, func(ctx context.Context) (net.Conn, error) {
+		return dialer.DialContext(ctx, "tcp", addr)
+	})
+	session, err := easyconnect.Open(ctx, gw, req.Username, req.Password, req.TOTPSecret)
+	if err != nil {
+		render.Status(r, http.StatusBadGateway)
+		render.JSON(w, r, newError(err.Error()))
+		return
+	}
+	session.Close()
+	render.JSON(w, r, render.M{"address": session.Address.String(), "ranges": len(session.Routing.IP), "domains": len(session.Routing.Domains), "dns": session.Routing.DNS})
 }

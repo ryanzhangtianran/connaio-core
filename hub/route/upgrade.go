@@ -15,8 +15,8 @@ import (
 func upgradeRouter() http.Handler {
 	r := chi.NewRouter()
 	r.Post("/ui", updateUI)
-	if !embedMode { // disallow upgrade core/geo in embed mode
-		r.Post("/", upgradeCore)
+	if !embedMode { // disallow upgrade geo in embed mode
+		// Connaio ships the core inside the app; self-upgrading would swap in upstream mihomo.
 		r.Post("/geo", updateGeoDatabases)
 	}
 	return r

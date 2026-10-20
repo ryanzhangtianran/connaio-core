@@ -62,7 +62,7 @@ type inetDiagResponse struct {
 	INode   uint32
 }
 
-func findProcessName(network string, ip netip.Addr, srcPort int) (uint32, string, error) {
+func findProcess(network string, ip netip.Addr, srcPort int) (uint32, uint32, string, error) {
 	uid, inode, err := resolveSocketByNetlink(network, ip, srcPort)
 	if runtime.GOOS == "android" {
 		// on Android (especially recent releases), netlink INET_DIAG can fail or return UID 0 / empty process info for some apps
@@ -77,9 +77,9 @@ func findProcessName(network string, ip netip.Addr, srcPort int) (uint32, string
 		}
 	}
 	if err != nil {
-		return 0, "", err
+		return 0, 0, "", err
 	}
-	pp, err := resolveProcessNameByProcSearch(inode, uid)
+	pid, pp, err := resolveProcessNameByProcSearch(inode, uid)
 	if runtime.GOOS == "android" {
 		// if inode-based /proc/<pid>/fd resolution fails but UID is known,
 		// fall back to resolving the process/package name by UID (typical on Android where all app processes share one UID).
@@ -87,7 +87,29 @@ func findProcessName(network string, ip netip.Addr, srcPort int) (uint32, string
 			pp, err = resolveProcessNameByUID(uid)
 		}
 	}
-	return uid, pp, err
+	return uid, pid, pp, err
+}
+
+func parentProcess(pid uint32) (uint32, string, error) {
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return 0, "", err
+	}
+	// "pid (comm) state ppid ...": comm may hold spaces or parens, so split after the last ')'
+	i := bytes.LastIndexByte(stat, ')')
+	fields := strings.Fields(string(stat[i+1:]))
+	if i < 0 || len(fields) < 2 {
+		return 0, "", fmt.Errorf("malformed /proc/%d/stat", pid)
+	}
+	ppid, err := strconv.ParseUint(fields[1], 10, 32)
+	if err != nil {
+		return 0, "", err
+	}
+	if ppid <= 1 {
+		return uint32(ppid), "", nil
+	}
+	path, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", ppid))
+	return uint32(ppid), path, err
 }
 
 func resolveSocketByNetlink(network string, ip netip.Addr, srcPort int) (uid uint32, inode uint32, err error) {
@@ -174,10 +196,10 @@ func resolveSocketByNetlink(network string, ip netip.Addr, srcPort int) (uid uin
 	return
 }
 
-func resolveProcessNameByProcSearch(inode, uid uint32) (string, error) {
+func resolveProcessNameByProcSearch(inode, uid uint32) (uint32, string, error) {
 	files, err := os.ReadDir("/proc")
 	if err != nil {
-		return "", err
+		return 0, "", err
 	}
 
 	buffer := make([]byte, unix.PathMax)
@@ -190,7 +212,7 @@ func resolveProcessNameByProcSearch(inode, uid uint32) (string, error) {
 
 		info, err := f.Info()
 		if err != nil {
-			return "", err
+			return 0, "", err
 		}
 		if info.Sys().(*syscall.Stat_t).Uid != uid {
 			continue
@@ -214,20 +236,26 @@ func resolveProcessNameByProcSearch(inode, uid uint32) (string, error) {
 				if bytes.Equal(buffer[:n], socket) {
 					cmdline, err := os.ReadFile(path.Join(processPath, "cmdline"))
 					if err != nil {
-						return "", err
+						return 0, "", err
 					}
 
-					return splitCmdline(cmdline), nil
+					return pidOf(f.Name()), splitCmdline(cmdline), nil
 				}
 			} else {
 				if bytes.Equal(buffer[:n], socket) {
-					return os.Readlink(filepath.Join(processPath, "exe"))
+					exe, err := os.Readlink(filepath.Join(processPath, "exe"))
+					return pidOf(f.Name()), exe, err
 				}
 			}
 		}
 	}
 
-	return "", fmt.Errorf("process of uid(%d),inode(%d) not found", uid, inode)
+	return 0, "", fmt.Errorf("process of uid(%d),inode(%d) not found", uid, inode)
+}
+
+func pidOf(name string) uint32 {
+	pid, _ := strconv.ParseUint(name, 10, 32)
+	return uint32(pid)
 }
 
 // resolveProcessNameByUID returns a process name for any process with uid.

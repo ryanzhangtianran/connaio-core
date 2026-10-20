@@ -54,6 +54,11 @@ func (s *Ssh) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.Conn, 
 	return NewConn(c, s), nil
 }
 
+// Client returns the shared SSH client, connecting on demand. Used by reverse tunnels (ssh -R).
+func (s *Ssh) Client(ctx context.Context) (*ssh.Client, error) {
+	return s.connect(ctx, s.addr)
+}
+
 func (s *Ssh) connect(ctx context.Context, addr string) (client *ssh.Client, err error) {
 	s.cMutex.Lock()
 	defer s.cMutex.Unlock()

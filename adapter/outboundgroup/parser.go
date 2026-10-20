@@ -48,6 +48,9 @@ type GroupCommonOption struct {
 func ParseProxyGroup(config map[string]any, proxyMap map[string]C.Proxy, providersMap map[string]P.ProxyProvider, AllProxies []string, AllProviders []string) (ProxyGroup, error) {
 	decoder := structure.NewDecoder(structure.Option{TagName: "group", WeaklyTypedInput: true})
 
+	if config["type"] == "subnet" && config["proxies"] == nil && config["use"] == nil {
+		config["proxies"] = subnetMembers(config)
+	}
 	groupOption := GroupCommonOption{
 		Lazy: true,
 	}
@@ -213,6 +216,13 @@ func ParseProxyGroup(config map[string]any, proxyMap map[string]C.Proxy, provide
 			return nil, err
 		}
 		return NewLoadBalance(groupOption, opt, emptyFallback, providers)
+	case "subnet":
+		opt := SubnetOption{}
+		err = decoder.Decode(config, &opt)
+		if err != nil {
+			return nil, err
+		}
+		return NewSubnet(groupOption, opt, emptyFallback, providers)
 	case "relay":
 		return nil, fmt.Errorf("%w: The group [%s] with relay type was removed, please using dialer-proxy instead", errType, groupName)
 	default:

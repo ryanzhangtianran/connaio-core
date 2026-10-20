@@ -18,8 +18,27 @@ const (
 	UDP = "udp"
 )
 
-func FindProcessName(network string, srcIP netip.Addr, srcPort int) (uint32, string, error) {
-	return findProcessName(network, srcIP, srcPort)
+// FindProcess returns the uid, pid (0 where the platform doesn't report it) and executable path
+// of the process owning the socket.
+func FindProcess(network string, srcIP netip.Addr, srcPort int) (uid, pid uint32, path string, err error) {
+	return findProcess(network, srcIP, srcPort)
+}
+
+const maxAncestorDepth = 64
+
+// Ancestors returns the executable paths of pid's ancestors, nearest first, stopping before pid 1.
+// It reads the live process table, so a reused pid can't yield a stale chain.
+func Ancestors(pid uint32) ([]string, error) {
+	var paths []string
+	for range maxAncestorDepth {
+		ppid, path, err := parentProcess(pid)
+		if err != nil || ppid <= 1 {
+			return paths, err
+		}
+		paths = append(paths, path)
+		pid = ppid
+	}
+	return paths, nil
 }
 
 // PackageNameResolver

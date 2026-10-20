@@ -44,6 +44,8 @@ const (
 	TRUSTTUNNEL
 	SHADOWQUIC
 	INNER
+	FRP // reverse-tunnels frp work connections
+	SSH // reverse-tunnels ssh -R connections
 )
 
 type AddrType byte
@@ -126,6 +128,10 @@ func (t Type) String() string {
 		return "ShadowQuic"
 	case INNER:
 		return "Inner"
+	case FRP:
+		return "FRP"
+	case SSH:
+		return "SSH"
 	default:
 		return "Unknown"
 	}
@@ -176,6 +182,10 @@ func ParseType(t string) (*Type, error) {
 		res = SHADOWQUIC
 	case "INNER":
 		res = INNER
+	case "FRP":
+		res = FRP
+	case "SSH":
+		res = SSH
 	default:
 		return nil, fmt.Errorf("unknown type: %s", t)
 	}
@@ -206,12 +216,21 @@ type Metadata struct {
 	Host         string     `json:"host"`
 	DNSMode      DNSMode    `json:"dnsMode"`
 	Uid          uint32     `json:"uid"`
+	Pid          uint32     `json:"pid,omitempty"`
 	Process      string     `json:"process"`
 	ProcessPath  string     `json:"processPath"`
 	SpecialProxy string     `json:"specialProxy"`
 	SpecialRules string     `json:"specialRules"`
 	RemoteDst    string     `json:"remoteDestination"`
-	DSCP         uint8      `json:"dscp"`
+	// OutboundLocal is the dialed connection's own end when it stays on this machine: one that reaches
+	// the core's own inbound (a reverse tunnel's DIRECT to the mixed port) comes back from there as
+	// the source, which ties the two together
+	OutboundLocal string `json:"outboundLocal,omitempty"`
+	DSCP          uint8  `json:"dscp"`
+
+	// the executables of the process's ancestors, nearest first, read when the connection opened:
+	// a short-lived command's chain is gone by the time a client could look it up
+	ProcessAncestors []string `json:"processAncestors,omitempty"`
 
 	RawSrcAddr net.Addr `json:"-"`
 	RawDstAddr net.Addr `json:"-"`
