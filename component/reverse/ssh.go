@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/metacubex/mihomo/adapter/inbound"
@@ -16,6 +17,11 @@ import (
 )
 
 const sshKeepAlive = 30 * time.Second
+
+// sshKeepAliveMax is how many keepalives in a row may go unanswered before the session counts as
+// dead, as OpenSSH's ServerAliveCountMax: a reply queues behind whatever the session carries, and
+// under a long transfer on a slow link one can take longer than an interval.
+const sshKeepAliveMax = 4
 
 // sshOption reuses the ssh outbound options (auth, host-key, dialer-proxy) plus the -R forwards.
 type sshOption struct {
@@ -88,21 +94,28 @@ func serveSSH(ctx context.Context, name string, out *outbound.Ssh, forwards []ss
 	}
 	up()
 
+	// a connection that breaks shows here at once; one that hangs, by its keepalives going unanswered
+	dead := make(chan error, 1)
+	go func() { dead <- client.Wait() }()
+	var unanswered atomic.Int32
 	ticker := time.NewTicker(sshKeepAlive)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case err := <-dead:
+			return fmt.Errorf("session closed: %w", err)
 		case <-ticker.C:
 		}
-		// closing the client (on timeout or ctx cancel) unblocks a hung request
-		timeout := time.AfterFunc(sshKeepAlive, func() { client.Close() })
-		_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
-		timeout.Stop()
-		if err != nil {
-			return fmt.Errorf("keepalive: %w", err)
+		if unanswered.Add(1) > sshKeepAliveMax {
+			return fmt.Errorf("keepalive: no reply in %s", sshKeepAlive*sshKeepAliveMax)
 		}
+		go func() { // waits for its reply without holding up the next tick; ends when the client closes
+			if _, _, err := client.SendRequest("keepalive@openssh.com", true, nil); err == nil {
+				unanswered.Store(0)
+			}
+		}()
 	}
 }
 
