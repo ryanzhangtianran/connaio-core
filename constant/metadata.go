@@ -44,7 +44,6 @@ const (
 	TRUSTTUNNEL
 	SHADOWQUIC
 	INNER
-	FRP // reverse-tunnels frp work connections
 	SSH // reverse-tunnels ssh -R connections
 )
 
@@ -128,8 +127,6 @@ func (t Type) String() string {
 		return "ShadowQuic"
 	case INNER:
 		return "Inner"
-	case FRP:
-		return "FRP"
 	case SSH:
 		return "SSH"
 	default:
@@ -182,8 +179,6 @@ func ParseType(t string) (*Type, error) {
 		res = SHADOWQUIC
 	case "INNER":
 		res = INNER
-	case "FRP":
-		res = FRP
 	case "SSH":
 		res = SSH
 	default:

@@ -1,7 +1,6 @@
 package reverse
 
 import (
-	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
@@ -11,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	frpv1 "github.com/fatedier/frp/pkg/config/v1"
-	frpserver "github.com/fatedier/frp/server"
 	"github.com/metacubex/mihomo/adapter"
 	"github.com/metacubex/mihomo/adapter/outbound"
 	C "github.com/metacubex/mihomo/constant"
@@ -22,73 +19,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestFrpTunnel(t *testing.T) {
-	t.Setenv("http_proxy", "http://127.0.0.1:1") // must not hijack the mihomo dialer
-	echo, udpEcho := startEcho(t), startUDPEcho(t)
-	frpsPort, remotePort, udpRemotePort := freePort(t), freePort(t), freeUDPPort(t)
-
-	cfg := &frpv1.ServerConfig{BindAddr: "127.0.0.1", BindPort: frpsPort}
-	require.NoError(t, cfg.Complete())
-	frps, err := frpserver.NewService(cfg)
-	require.NoError(t, err)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go frps.Run(ctx)
-
-	mapping := map[string]any{"name": "frp-test", "type": "frp", "config": map[string]any{
-		"serverAddr": "127.0.0.1",
-		"serverPort": frpsPort,
-		"proxies": []any{
-			map[string]any{"name": "echo", "type": "tcp", "localIP": "127.0.0.1", "localPort": portOf(t, echo), "remotePort": remotePort},
-			map[string]any{"name": "udp-echo", "type": "udp", "localIP": "127.0.0.1", "localPort": portOf(t, udpEcho), "remotePort": udpRemotePort},
-		},
-	}}
-	tun, err := Parse(mapping, startTunnel(t))
-	require.NoError(t, err)
-	Patch([]*Tunnel{tun})
-	defer Patch(nil)
-	remote := net.JoinHostPort("127.0.0.1", strconv.Itoa(remotePort))
-	requireEcho(t, remote)
-	requireUDPEcho(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(udpRemotePort)))
-	requireRejectedByRule(t, "IN-TYPE", "FRP", remote)
-
-	status := Statuses()
-	require.Len(t, status, 1)
-	require.Equal(t, StateRunning, status[0].State)
-	require.Len(t, status[0].Forwards, 2)
-	for _, f := range status[0].Forwards {
-		require.Equal(t, "running", f.State, f.Name)
-		require.NotEmpty(t, f.Remote, f.Name)
-	}
-
-	// reload with identical config keeps the running instance
-	before := active["frp-test"]
-	same, err := Parse(mapping, tunnel.Tunnel)
-	require.NoError(t, err)
-	Patch([]*Tunnel{same})
-	require.Same(t, before, active["frp-test"])
-
-	Patch(nil)
-	require.Empty(t, active)
-}
-
 func TestSSHTunnel(t *testing.T) {
 	echo := startEcho(t)
 	server := startSSHServer(t)
 	remote := net.JoinHostPort("127.0.0.1", strconv.Itoa(freePort(t)))
 
-	tun, err := Parse(map[string]any{
+	cfg := map[string]any{
 		"name": "ssh-test", "type": "ssh",
 		"server": "127.0.0.1", "port": portOf(t, server),
 		"username": "u", "password": "pw",
 		"forwards": []any{map[string]any{"remote": remote, "local": echo}},
-	}, startTunnel(t))
+	}
+	tn := startTunnel(t)
+	tun, err := Parse(cfg, tn)
 	require.NoError(t, err)
 	Patch([]*Tunnel{tun})
 	defer Patch(nil)
 	requireEcho(t, remote)
 	requireRejectedByRule(t, "IN-NAME", "ssh-test", remote)
 	require.Equal(t, StateRunning, Statuses()[0].State)
+
+	// a reload keeps an unchanged tunnel's session and restarts a changed one
+	before := active["ssh-test"]
+	same, err := Parse(cfg, tn)
+	require.NoError(t, err)
+	Patch([]*Tunnel{same})
+	require.Same(t, before, active["ssh-test"])
+	cfg["username"] = "u2"
+	changed, err := Parse(cfg, tn)
+	require.NoError(t, err)
+	Patch([]*Tunnel{changed})
+	require.NotSame(t, before, active["ssh-test"])
 }
 
 // TestDisabledTunnel: a tunnel disabled in the config is listed as stopped and not run; enabling it
@@ -119,21 +80,11 @@ func TestDisabledTunnel(t *testing.T) {
 }
 
 func TestParseErrors(t *testing.T) {
-	frpCfg := func(extra map[string]any) map[string]any {
-		cfg := map[string]any{"serverAddr": "127.0.0.1"}
-		for k, v := range extra {
-			cfg[k] = v
-		}
-		return cfg
-	}
 	for name, mapping := range map[string]map[string]any{
-		"no name":          {"type": "ssh"},
-		"bad type":         {"name": "x", "type": "nope"},
-		"frp no config":    {"name": "x", "type": "frp"},
-		"frp quic+dialer":  {"name": "x", "type": "frp", "dialer-proxy": "p", "config": frpCfg(map[string]any{"transport": map[string]any{"protocol": "quic"}})},
-		"frp proxyURL+dlr": {"name": "x", "type": "frp", "dialer-proxy": "p", "config": frpCfg(map[string]any{"transport": map[string]any{"proxyURL": "socks5://127.0.0.1:1080"}})},
-		"ssh no forwards":  {"name": "x", "type": "ssh", "server": "h", "port": 22, "username": "u"},
-		"ssh bad forward":  {"name": "x", "type": "ssh", "server": "h", "port": 22, "username": "u", "forwards": []any{map[string]any{"remote": "8080", "local": "127.0.0.1:80"}}},
+		"no name":         {"type": "ssh"},
+		"bad type":        {"name": "x", "type": "nope"},
+		"ssh no forwards": {"name": "x", "type": "ssh", "server": "h", "port": 22, "username": "u"},
+		"ssh bad forward": {"name": "x", "type": "ssh", "server": "h", "port": 22, "username": "u", "forwards": []any{map[string]any{"remote": "8080", "local": "127.0.0.1:80"}}},
 	} {
 		_, err := Parse(mapping, nil)
 		require.Error(t, err, name)
@@ -165,47 +116,6 @@ func requireRejectedByRule(t *testing.T, ruleType, payload, addr string) {
 	c.Write([]byte("ping"))
 	_, err = io.ReadFull(c, make([]byte, 4))
 	require.Error(t, err)
-}
-
-func startUDPEcho(t *testing.T) string {
-	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
-	require.NoError(t, err)
-	t.Cleanup(func() { pc.Close() })
-	go func() {
-		buf := make([]byte, 2048)
-		for {
-			n, addr, err := pc.ReadFrom(buf)
-			if err != nil {
-				return
-			}
-			pc.WriteTo(buf[:n], addr)
-		}
-	}()
-	return pc.LocalAddr().String()
-}
-
-func requireUDPEcho(t *testing.T, addr string) {
-	require.Eventually(t, func() bool {
-		c, err := net.Dial("udp", addr)
-		if err != nil {
-			return false
-		}
-		defer c.Close()
-		c.SetDeadline(time.Now().Add(500 * time.Millisecond))
-		if _, err := c.Write([]byte("ping")); err != nil {
-			return false
-		}
-		buf := make([]byte, 16)
-		n, err := c.Read(buf)
-		return err == nil && string(buf[:n]) == "ping"
-	}, 20*time.Second, 200*time.Millisecond)
-}
-
-func freeUDPPort(t *testing.T) int {
-	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer pc.Close()
-	return pc.LocalAddr().(*net.UDPAddr).Port
 }
 
 func startEcho(t *testing.T) string {

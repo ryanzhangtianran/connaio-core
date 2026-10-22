@@ -1,4 +1,4 @@
-// Package reverse runs reverse tunnels (frpc, ssh -R) that expose local services through a remote server.
+// Package reverse runs reverse tunnels (ssh -R) that expose local services through a remote server.
 package reverse
 
 import (
@@ -14,7 +14,11 @@ import (
 	"github.com/metacubex/mihomo/log"
 )
 
-const retryInterval = 10 * time.Second // ponytail: fixed retry, switch to backoff if servers get hammered
+// retryInterval is the wait after a failure, doubling up to retryMax while they go on.
+const (
+	retryInterval = 10 * time.Second
+	retryMax      = time.Minute
+)
 
 const (
 	StateConnecting = "connecting"
@@ -47,12 +51,8 @@ type Status struct {
 }
 
 type ForwardStatus struct {
-	Name   string `json:"name,omitempty"` // frp proxy name
-	Type   string `json:"type,omitempty"` // frp proxy type
-	Remote string `json:"remote,omitempty"`
+	Remote string `json:"remote"`
 	Local  string `json:"local"`
-	State  string `json:"state,omitempty"` // frp proxy phase
-	Error  string `json:"error,omitempty"`
 }
 
 // Parse builds a tunnel from one `reverse-tunnels` entry. tunnel resolves dialer-proxy names
@@ -69,8 +69,6 @@ func Parse(mapping map[string]any, tunnel C.Tunnel) (*Tunnel, error) {
 	disabled, _ := mapping["disabled"].(bool)
 	t := &Tunnel{Name: name, Disabled: disabled, hash: string(raw)}
 	switch t.Type, _ = mapping["type"].(string); t.Type {
-	case "frp":
-		err = parseFrp(t, mapping, tunnel)
 	case "ssh":
 		err = parseSSH(t, mapping, tunnel)
 	default:
@@ -103,22 +101,25 @@ func (t *Tunnel) Status() Status {
 	return s
 }
 
-// retry calls serve until ctx is done, waiting retryInterval after each failure.
+// retry calls serve until ctx is done, waiting retryInterval after a failure, longer after each in
+// a row, retryInterval again once a serve came up.
 // serve calls up once its session is established.
 func (t *Tunnel) retry(ctx context.Context, serve func(ctx context.Context, up func()) error) {
+	delay := retryInterval
 	for {
 		t.setState(StateConnecting, nil)
-		err := serve(ctx, func() { t.setState(StateRunning, nil) })
+		err := serve(ctx, func() { delay = retryInterval; t.setState(StateRunning, nil) })
 		if ctx.Err() != nil {
 			return
 		}
 		t.setState(StateRetrying, err)
-		log.Warnln("[ReverseTunnel] %s: %v, retry in %s", t.Name, err, retryInterval)
+		log.Warnln("[ReverseTunnel] %s: %v, retry in %s", t.Name, err, delay)
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(retryInterval):
+		case <-time.After(delay):
 		}
+		delay = min(delay*2, retryMax)
 	}
 }
 

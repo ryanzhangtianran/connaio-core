@@ -257,22 +257,10 @@ tunnels: # one line config
     proxy: proxy
 
 # 反向隧道：把本地服务暴露到远端服务器，配置重载时只重启有变化的条目
-# 反代进来的流量按规则分流：IN-TYPE 为 FRP 或 SSH，IN-NAME 为隧道名，SRC-IP 为远端用户地址，
-# 目标是 frp 的 localIP:localPort（tcp/udp 类代理）或 ssh 的 local；frp 插件（plugin）不经过规则
+# 反代进来的流量按规则分流：IN-TYPE 为 SSH，IN-NAME 为隧道名，SRC-IP 为远端用户地址，目标是 forwards 的 local
 # 本地服务通常需要直连规则，如 IN-NAME,home-nas,DIRECT
-# 运行状态：GET /reverse-tunnels（state 为 connecting/running/retrying，frp 附带每个代理的状态与远端地址）
+# 运行状态：GET /reverse-tunnels（state 为 connecting/running/retrying）
 reverse-tunnels:
-  # frpc，config 为原生 frpc v1 配置（字段与 frpc.toml/yaml 相同，驼峰命名）
-  - name: home-nas
-    type: frp
-    dialer-proxy: proxy # 可选，连接 frps 时经过的代理或代理组；不填则直连
-    config:
-      serverAddr: frps.example.com
-      serverPort: 7000
-      auth: { token: xxx }
-      # transport.protocol 为 quic/kcp 时不支持 dialer-proxy；未显式配置 transport.proxyURL 时忽略 $http_proxy
-      proxies:
-        - { name: nas-web, type: tcp, localIP: 127.0.0.1, localPort: 5000, remotePort: 15000 }
   # ssh -R，认证字段同 ssh 代理
   - name: vps
     type: ssh
