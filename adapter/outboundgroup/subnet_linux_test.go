@@ -5,7 +5,8 @@ import "testing"
 func TestLinuxNetworkParsing(t *testing.T) {
 	route := "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\n" +
 		"wlp2s0\t00000000\t0101A8C0\t0003\t0\t0\t600\t00000000\n" +
-		"enp3s0\t00000000\t0100000A\t0003\t0\t0\t100\t00000000\n"
+		"enp3s0\t00000000\t0100000A\t0003\t0\t0\t100\t00000000\n" +
+		"tun0\t00000000\t0000000A\t0003\t0\t0\t0\t00000080\n" // OpenVPN's 0.0.0.0/1, metric 0
 	if iface, gw := defaultRoute(route); iface != "enp3s0" || gw != "10.0.0.1" {
 		t.Fatalf("%s %s", iface, gw)
 	}

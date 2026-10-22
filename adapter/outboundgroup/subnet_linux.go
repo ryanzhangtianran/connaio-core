@@ -30,9 +30,12 @@ func readNetwork() Network {
 			}
 		}
 	}
-	_, err := os.Stat("/sys/class/net/" + iface + "/wireless")
+	_, err := os.Stat("/sys/class/net/" + iface + "/phy80211") // every cfg80211 driver; wireless needs CONFIG_CFG80211_WEXT
+	if err != nil {
+		_, err = os.Stat("/sys/class/net/" + iface + "/wireless")
+	}
 	n.WiFi = err == nil
-	n.Wired = !n.WiFi
+	n.Wired = !n.WiFi && !tunnelInterface(iface)
 	if n.WiFi {
 		n.SSID, n.BSSID = activeWiFi(run("nmcli", "-t", "-f", "ACTIVE,SSID,BSSID", "device", "wifi", "--rescan", "no"))
 	}
@@ -45,7 +48,7 @@ func defaultRoute(table string) (iface, gateway string) {
 	metric := -1
 	for _, line := range strings.Split(table, "\n") {
 		f := strings.Fields(line)
-		if len(f) < 7 || f[1] != "00000000" {
+		if len(f) < 8 || f[1] != "00000000" || f[7] != "00000000" { // a 0.0.0.0/1 (redirect-gateway def1) is not the default
 			continue
 		}
 		m, _ := strconv.Atoi(f[6])
@@ -82,4 +85,14 @@ func activeWiFi(out string) (ssid, bssid string) {
 		}
 	}
 	return "", ""
+}
+
+// tunnelInterface: a VPN's default route, whose network is neither wired nor Wi-Fi.
+func tunnelInterface(iface string) bool {
+	for _, p := range []string{"tun", "tap", "wg", "ppp"} {
+		if strings.HasPrefix(iface, p) {
+			return true
+		}
+	}
+	return false
 }

@@ -117,6 +117,8 @@ func parseRouting(rclist string) Routing {
 			if ip, err := netip.ParseAddr(name); err == nil && ip.Is4() {
 				if p, err := strconv.ParseUint(portText, 10, 16); err == nil {
 					portMin, portMax = uint16(p), uint16(p)
+				} else if strings.Contains(host, "//") && portMax == 0 { // a URL's port attribute is 0~0: any port, as for a name
+					portMin, portMax = 0, 65535
 				}
 				routing.IP = append(routing.IP, Range{ip, ip, portMin, portMax, protocol})
 			} else if name = strings.ToLower(strings.Trim(name, ".")); name != "" {

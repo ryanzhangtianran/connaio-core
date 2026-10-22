@@ -60,7 +60,9 @@ func TestProcessAncestor(t *testing.T) {
 	defer cmd.Wait()
 	defer stdin.Close()
 
-	metadata := &C.Metadata{Pid: uint32(cmd.Process.Pid), ProcessPath: child}
+	ancestors, err := process.Ancestors(uint32(cmd.Process.Pid))
+	require.NoError(t, err)
+	metadata := &C.Metadata{Pid: uint32(cmd.Process.Pid), ProcessPath: child, ProcessAncestors: ancestors}
 	match := func(ruleType C.RuleType, payload string) bool {
 		rule, err := NewProcessAncestor(payload, "DIRECT", ruleType)
 		require.NoError(t, err)
@@ -84,6 +86,6 @@ func TestProcessAncestor(t *testing.T) {
 	metadata.Type = C.HTTP
 	require.False(t, filtered("no-such-process"), "non-TUN inbounds are untouched")
 
-	metadata.Pid = 0 // without a pid only the process itself can match
+	metadata.ProcessAncestors = nil // without a pid the tunnel fills none: only the process itself can match
 	require.False(t, match(C.ProcessAncestor, filepath.Base(self)))
 }

@@ -308,3 +308,17 @@ func TestPool_FlushMemoryCache(t *testing.T) {
 	assert.NotEqual(t, bar, next)
 	assert.Equal(t, baz, nero)
 }
+
+func TestPoolCloneFromItself(t *testing.T) {
+	pools, tempfile, err := createPools(Options{IPNet: netip.MustParsePrefix("192.168.0.1/29"), Size: 10})
+	assert.NoError(t, err)
+	defer os.Remove(tempfile)
+	pool := pools[0]
+	done := make(chan struct{})
+	go func() { pool.CloneFrom(pool); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("CloneFrom(self) must return, not take its own lock twice")
+	}
+}

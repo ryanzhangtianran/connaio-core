@@ -40,6 +40,7 @@ type EasyConnect struct {
 	stack      ipStack
 	resolver   resolver.Resolver
 	connecting bool
+	routing    *easyconnect.Routing // Routing's answer for session, computed on first use
 	// successor is the outbound a reload replaced this one with while its login was running; the
 	// login's result goes to it, so a reload during startup doesn't log in twice (the gateway allows
 	// one session per account) nor abandon a session.
@@ -240,7 +241,7 @@ func (e *EasyConnect) handOver(to *EasyConnect) {
 		to.session, to.stack = e.session, e.stack
 		to.resolver = to.newResolver(e.session.Routing.DNS)
 		to.mu.Unlock()
-		e.session, e.stack, e.resolver = nil, nil, nil
+		e.session, e.stack, e.resolver, e.routing = nil, nil, nil, nil
 		return
 	case same && e.connecting:
 		to.mu.Lock()
@@ -370,7 +371,7 @@ func (e *EasyConnect) connect(ctx context.Context) (ipStack, resolver.Resolver, 
 		_ = stack.Close()
 		return nil, nil, errClosed
 	}
-	e.session, e.stack = session, stack
+	e.session, e.stack, e.routing = session, stack, nil
 	e.resolver = e.newResolver(session.Routing.DNS)
 	return stack, e.resolver, nil
 }
@@ -426,7 +427,7 @@ func (e *EasyConnect) teardown() {
 		_ = e.stack.Close()
 		e.stack = nil
 	}
-	e.resolver = nil
+	e.resolver, e.routing = nil, nil
 }
 
 // Routing is what the gateway routes less SkipRoutes, or nil while the tunnel
@@ -434,16 +435,25 @@ func (e *EasyConnect) teardown() {
 func (e *EasyConnect) Routing() *easyconnect.Routing {
 	e.mu.Lock()
 	up := e.session != nil && e.session.Failed() == nil
-	var routing easyconnect.Routing
-	if up {
-		routing = e.session.Routing.Without(e.option.SkipRoutes)
+	if up && e.routing == nil { // once per session, not two clones of the gateway's list per matched connection
+		r := e.session.Routing.Without(e.option.SkipRoutes)
+		e.routing = &r
 	}
+	routing := e.routing
 	e.mu.Unlock()
 	if !up {
 		e.kick()
 		return nil
 	}
-	return &routing
+	return routing
+}
+
+// Up says whether this outbound's tunnel to the account at server:port is up: the test endpoint
+// returns it instead of logging in again, which would end it (one session per account).
+func (e *EasyConnect) Up(server string, port int, username string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.option.Server == server && e.option.Port == port && e.option.UserName == username && e.session != nil && e.session.Failed() == nil
 }
 
 func (e *EasyConnect) Status() EasyConnectStatus {

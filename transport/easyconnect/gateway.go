@@ -280,12 +280,12 @@ func (g *Gateway) Logout() {
 }
 
 // Resources is what the gateway will route for this session.
-func (g *Gateway) Resources(ctx context.Context) Routing {
+func (g *Gateway) Resources(ctx context.Context) (Routing, error) {
 	r, err := g.request(ctx, "GET", "/por/rclist.csp", nil)
 	if err != nil {
-		return Routing{}
+		return Routing{}, err
 	}
-	return parseRouting(r.body)
+	return parseRouting(r.body), nil
 }
 
 // connect is a TLS connection to the gateway on the physical network, with a
@@ -297,7 +297,11 @@ func (g *Gateway) connect(ctx context.Context, h hello) (*tlsConn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect %s: %w", g.authority(), err)
 	}
-	_ = raw.SetDeadline(time.Now().Add(requestTimeout))
+	deadline := time.Now().Add(requestTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) { // a bounded caller (Logout) stays bounded
+		deadline = d
+	}
+	_ = raw.SetDeadline(deadline)
 	tls, err := handshake(raw, h)
 	if err != nil {
 		raw.Close()
@@ -344,7 +348,7 @@ func readResponse(r io.Reader) (*response, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20)) // a resource list is kilobytes; a root daemon's heap isn't the place for a runaway body
 	if err != nil {
 		return nil, err
 	}

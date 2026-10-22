@@ -3,6 +3,8 @@ package outboundgroup
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/dlclark/regexp2"
@@ -221,6 +223,13 @@ func ParseProxyGroup(config map[string]any, proxyMap map[string]C.Proxy, provide
 		err = decoder.Decode(config, &opt)
 		if err != nil {
 			return nil, err
+		}
+		if config["use"] == nil { // listed members must include every target, or a condition would silently pick the first member
+			for _, want := range append(slices.Sorted(maps.Values(opt.Rules)), opt.Default) {
+				if !slices.Contains(groupOption.Proxies, want) {
+					return nil, fmt.Errorf("%s: subnet group's proxies must include %s", groupName, want)
+				}
+			}
 		}
 		return NewSubnet(groupOption, opt, emptyFallback, providers)
 	case "relay":

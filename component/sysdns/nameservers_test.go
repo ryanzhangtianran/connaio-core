@@ -17,3 +17,11 @@ func TestReadResolvConf(t *testing.T) {
 		t.Errorf("got %v, want %v", got, want)
 	}
 }
+
+func TestParseResolvectlDNS(t *testing.T) {
+	got := parseResolvectlDNS("Global:\nLink 2 (wlp2s0): 192.168.1.1 fd00::1\nLink 5 (tun0): 10.0.0.53\nLink 6 (docker0):\n")
+	want := []netip.Addr{netip.MustParseAddr("192.168.1.1"), netip.MustParseAddr("fd00::1"), netip.MustParseAddr("10.0.0.53")}
+	if !slices.Equal(got, want) {
+		t.Fatalf("%v", got)
+	}
+}

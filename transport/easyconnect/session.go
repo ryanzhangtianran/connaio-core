@@ -66,7 +66,11 @@ func Open(ctx context.Context, gw *Gateway, username, password, totpSecret strin
 		return nil, err
 	}
 	started := time.Now()
-	routing := gw.Resources(ctx)
+	routing, err := gw.Resources(ctx)
+	if err != nil { // a session with no routes would stay up matching nothing; failing here retries with the usual backoff
+		gw.Logout()
+		return nil, err
+	}
 	// The gateway refuses an address requested within a second of the token.
 	if wait := time.Second - time.Since(started); wait > 0 {
 		time.Sleep(wait)
@@ -129,7 +133,7 @@ func (s *Session) Close() {
 		}
 	}
 	s.control.Close()
-	s.gw.Logout() // frees the account for the next login
+	go s.gw.Logout() // frees the account for the next login; best effort, and callers hold the outbound's lock
 }
 
 // guard runs a goroutine's body, recording a panic as the failure rather than
@@ -188,10 +192,7 @@ func (s *Session) send() {
 	packets := make([][]byte, batch)
 	for {
 		n, err := s.link.Read(buffers, sizes, 0)
-		if errors.Is(err, io.ErrShortBuffer) {
-			continue // a packet past the MTU; drop it rather than the tunnel
-		}
-		if err != nil {
+		if err != nil && !errors.Is(err, io.ErrShortBuffer) { // a packet past the MTU is dropped, not the tunnel; the n before it were read
 			s.fail(err)
 			return
 		}

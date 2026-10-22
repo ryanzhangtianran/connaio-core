@@ -213,7 +213,6 @@ type Config struct {
 	RuleProviders  map[string]P.RuleProvider
 	Tunnels        []LC.Tunnel
 	ReverseTunnels []*reverse.Tunnel
-	Capture        RawCapture
 	Sniffer        *sniffer.Config
 	TLS            *TLS
 }
@@ -734,7 +733,6 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 		return nil, err
 	}
 
-	config.Capture = rawCfg.Capture
 	config.Rules, err = parseCapture(rawCfg, config.General, config.Rules)
 	if err != nil {
 		return nil, err

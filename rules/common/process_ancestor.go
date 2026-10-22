@@ -5,7 +5,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/metacubex/mihomo/component/process"
 	C "github.com/metacubex/mihomo/constant"
 )
 
@@ -29,11 +28,10 @@ func (pa *ProcessAncestor) Match(metadata *C.Metadata, helper C.RuleMatchHelper)
 	return slices.ContainsFunc(processChain(metadata), pa.match), pa.adapter
 }
 
-// processChain is the process's own path followed by its ancestors' paths.
-// ponytail: walks the live chain on every evaluation (a few syscalls); cache on metadata if rule sets grow
+// processChain is the process's own path followed by its ancestors', as the tunnel's FindProcess
+// filled them in (none without a pid).
 func processChain(metadata *C.Metadata) []string {
-	ancestors, _ := process.Ancestors(metadata.Pid) // pid 0 (unknown) yields none
-	return append([]string{metadata.ProcessPath}, ancestors...)
+	return append([]string{metadata.ProcessPath}, metadata.ProcessAncestors...)
 }
 
 func (pa *ProcessAncestor) match(path string) bool {

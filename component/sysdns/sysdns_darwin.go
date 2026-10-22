@@ -1,11 +1,11 @@
 package sysdns
 
-import "os/exec"
-
 func splitResolvers() ([]Resolver, error) {
-	out, err := exec.Command("scutil", "--dns").Output()
+	out, err := output("scutil", "--dns")
 	if err != nil {
 		return nil, err
 	}
 	return parseScutil(string(out)), nil
 }
+
+func resolvedDNS() string { return "" }

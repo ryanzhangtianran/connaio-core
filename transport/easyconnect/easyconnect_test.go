@@ -50,11 +50,11 @@ func TestHTTPBodiesAreReadToTheirLengthThroughChunksOrToTheEnd(t *testing.T) {
 func TestTheResourceListBecomesRangesDomainsAndResolvers(t *testing.T) {
 	routing := parseRouting(`
 		<Resource><Rcs>
-		<Rc id="1" type="1" proto="0" host="10.0.0.0~10.255.255.255;https://git.example.edu.cn/x;10.1.2.3:2222" port="1~65535;0~0;0~0" />
+		<Rc id="1" type="1" proto="0" host="10.0.0.0~10.255.255.255;https://git.example.edu.cn/x;10.1.2.3:2222;https://10.20.30.40/" port="1~65535;0~0;0~0;0~0" />
 		<Rc id="2" type="0" proto="0" host="192.168.0.1" port="80~80" />
 		</Rcs><Dns dnsserver="10.10.0.21;10.10.0.22;" data="" /></Resource>`)
 	addr := netip.MustParseAddr
-	want := []Range{{addr("10.0.0.0"), addr("10.255.255.255"), 1, 65535, "tcp"}, {addr("10.1.2.3"), addr("10.1.2.3"), 2222, 2222, "tcp"}}
+	want := []Range{{addr("10.0.0.0"), addr("10.255.255.255"), 1, 65535, "tcp"}, {addr("10.1.2.3"), addr("10.1.2.3"), 2222, 2222, "tcp"}, {addr("10.20.30.40"), addr("10.20.30.40"), 0, 65535, "tcp"}}
 	if !reflect.DeepEqual(routing.IP, want) {
 		t.Errorf("ip = %+v", routing.IP)
 	}

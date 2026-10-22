@@ -148,10 +148,11 @@ func run(name string, args ...string) string {
 
 func (s *Subnet) selectedProxy(touch bool) C.Proxy {
 	proxies := s.GetProxies(touch)
-	name := s.target()
-	for _, p := range proxies {
-		if p.Name() == name {
-			return p
+	for _, name := range []string{s.target(), s.def} { // a target a provider update dropped falls back to the default, not to whoever is first
+		for _, p := range proxies {
+			if p.Name() == name {
+				return p
+			}
 		}
 	}
 	return proxies[0]

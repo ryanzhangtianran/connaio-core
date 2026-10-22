@@ -328,6 +328,8 @@ func startUnix(cfg *Config) {
 			gid, _ := strconv.Atoi(g.Gid)
 			_ = os.Chown(addr, -1, gid)
 			_ = os.Chmod(addr, 0o660)
+		} else if os.Geteuid() == 0 {
+			_ = os.Chmod(addr, 0o600) // a root core started without the daemon's env: not every local user's
 		} else {
 			_ = os.Chmod(addr, 0o666)
 		}
@@ -637,6 +639,13 @@ func easyConnectTest(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Port == 0 {
 		req.Port = 443
+	}
+	for _, router := range easyconnect.Routers() { // the account's live tunnel answers; a login would end it
+		if e, ok := router.(*outbound.EasyConnect); ok && e.Up(req.Server, req.Port, req.Username) {
+			st := e.Status()
+			render.JSON(w, r, render.M{"address": st.Address, "ranges": len(st.Routing.IP), "domains": len(st.Routing.Domains), "dns": st.Routing.DNS})
+			return
+		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
 	defer cancel()

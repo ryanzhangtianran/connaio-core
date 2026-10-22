@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -83,6 +84,11 @@ func init() {
 // the parent that started this core is gone (-exit-with-parent).
 var stopSign = make(chan struct{})
 
+var stopOnce sync.Once
+
+// stop closes stopSign once: the parent watcher and the service manager may both ask.
+func stop() { stopOnce.Do(func() { close(stopSign) }) }
+
 var exitWithParent bool
 
 // watchParent closes stopSign once the parent process is gone: a GUI that crashed or was killed
@@ -92,7 +98,7 @@ func watchParent() {
 	for range time.Tick(2 * time.Second) {
 		if os.Getppid() != parent || parent == 1 { // 1: already orphaned before the first look
 			log.Warnln("parent process %d is gone, shutting down", parent)
-			close(stopSign)
+			stop()
 			return
 		}
 	}

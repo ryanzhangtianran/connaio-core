@@ -48,7 +48,7 @@ func (s service) Execute(_ []string, requests <-chan svc.ChangeRequest, status c
 				status <- r.CurrentStatus
 			case svc.Stop, svc.Shutdown:
 				status <- svc.Status{State: svc.StopPending}
-				close(stopSign)
+				stop()
 				<-done
 				return false, 0
 			}

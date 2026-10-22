@@ -41,7 +41,7 @@ func readNetwork() Network {
 	}
 	sum := run("ipconfig", "getsummary", iface)
 	n.WiFi = field(sum, "InterfaceType", 2) == "WiFi"
-	n.Wired = !n.WiFi
+	n.Wired = !n.WiFi && strings.HasPrefix(iface, "en") // a VPN's utun/ipsec/ppp default route is neither
 	if v := field(sum, "SSID", 2); v != "<redacted>" {
 		n.SSID = v
 	}

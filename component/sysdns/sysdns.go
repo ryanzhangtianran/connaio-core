@@ -3,13 +3,24 @@
 package sysdns
 
 import (
+	"context"
 	"net"
+	"os/exec"
 	"strings"
+	"time"
 )
 
 type Resolver struct {
 	Domains     []string
 	Nameservers []string // mihomo nameserver syntax, bound to the resolver's interface: udp://10.0.0.53:53#utun4
+}
+
+// output runs a system tool, or gives up after five seconds: configd and resolved stall around VPN
+// changes and sleep, and the caller holds the executor's lock.
+func output(name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).Output()
 }
 
 // SplitResolvers returns the current per-domain resolvers; nil where the platform has none or isn't supported.

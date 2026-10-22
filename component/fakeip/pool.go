@@ -88,6 +88,9 @@ func (p *Pool) IPNet() netip.Prefix {
 
 // CloneFrom clone cache from old pool
 func (p *Pool) CloneFrom(o *Pool) {
+	if o == p { // the same pool re-applied (the DNS config copied with new system resolvers): nothing to copy, and a second Lock would wait forever
+		return
+	}
 	p.mux.Lock()
 	defer p.mux.Unlock()
 
