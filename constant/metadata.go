@@ -44,7 +44,7 @@ const (
 	TRUSTTUNNEL
 	SHADOWQUIC
 	INNER
-	SSH // reverse-tunnels ssh -R connections
+	WIREGUARD // reverse-tunnels connections
 )
 
 type AddrType byte
@@ -127,8 +127,8 @@ func (t Type) String() string {
 		return "ShadowQuic"
 	case INNER:
 		return "Inner"
-	case SSH:
-		return "SSH"
+	case WIREGUARD:
+		return "WireGuard"
 	default:
 		return "Unknown"
 	}
@@ -179,8 +179,8 @@ func ParseType(t string) (*Type, error) {
 		res = SHADOWQUIC
 	case "INNER":
 		res = INNER
-	case "SSH":
-		res = SSH
+	case "WIREGUARD":
+		res = WIREGUARD
 	default:
 		return nil, fmt.Errorf("unknown type: %s", t)
 	}

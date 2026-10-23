@@ -1,17 +1,23 @@
-// Package reverse runs reverse tunnels (ssh -R) that expose local services through a remote server.
+// Package reverse runs reverse tunnels (a WireGuard peer of a remote server) that expose local
+// services through that server.
 package reverse
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/metacubex/mihomo/adapter/inbound"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
+	"github.com/metacubex/mihomo/transport/socks5"
 )
 
 // retryInterval is the wait after a failure, doubling up to retryMax while they go on.
@@ -48,6 +54,7 @@ type Status struct {
 	Error    string          `json:"error,omitempty"`
 	Since    time.Time       `json:"since"`
 	Forwards []ForwardStatus `json:"forwards"`
+	Relay    string          `json:"relay,omitempty"` // connaio-relay's version at the server, when it answers
 }
 
 type ForwardStatus struct {
@@ -69,8 +76,8 @@ func Parse(mapping map[string]any, tunnel C.Tunnel) (*Tunnel, error) {
 	disabled, _ := mapping["disabled"].(bool)
 	t := &Tunnel{Name: name, Disabled: disabled, hash: string(raw)}
 	switch t.Type, _ = mapping["type"].(string); t.Type {
-	case "ssh":
-		err = parseSSH(t, mapping, tunnel)
+	case "wireguard":
+		err = parseWireGuard(t, mapping, tunnel)
 	default:
 		err = fmt.Errorf("unsupported type %q", t.Type)
 	}
@@ -78,6 +85,39 @@ func Parse(mapping map[string]any, tunnel C.Tunnel) (*Tunnel, error) {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	return t, nil
+}
+
+type forward struct {
+	Remote string      `proxy:"remote"` // address the server listens on, e.g. 0.0.0.0:8080 (127.0.0.1 for the server only); this end takes its port on its tunnel address
+	Local  string      `proxy:"local"`  // target routed by rules, e.g. 127.0.0.1:80
+	target socks5.Addr `proxy:"-"`
+}
+
+// parseForwards checks each forward's remote and fills in its target.
+func parseForwards(forwards []forward) error {
+	if len(forwards) == 0 {
+		return errors.New("forwards is empty")
+	}
+	for i, f := range forwards {
+		if _, err := netip.ParseAddrPort(f.Remote); err != nil {
+			return fmt.Errorf("invalid forward remote %q: %w", f.Remote, err)
+		}
+		if forwards[i].target = socks5.ParseAddr(f.Local); forwards[i].target == nil {
+			return fmt.Errorf("invalid forward local %q", f.Local)
+		}
+	}
+	return nil
+}
+
+// acceptLoop hands each connection ln accepts to the rules, as an inbound named name.
+func acceptLoop(tunnel C.Tunnel, name string, ln net.Listener, target socks5.Addr) {
+	for {
+		c, err := ln.Accept() // RemoteAddr is the originating user, so SRC-IP rules work
+		if err != nil {
+			return
+		}
+		go tunnel.HandleTCPConn(inbound.NewSocket(target, c, C.WIREGUARD, inbound.WithInName(name)))
+	}
 }
 
 func (t *Tunnel) setState(state string, err error) {
@@ -90,6 +130,12 @@ func (t *Tunnel) setState(state string, err error) {
 	if err != nil {
 		t.state.Error = err.Error()
 	}
+}
+
+func (t *Tunnel) setRelay(version string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.state.Relay = version
 }
 
 func (t *Tunnel) Status() Status {

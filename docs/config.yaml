@@ -257,21 +257,29 @@ tunnels: # one line config
     proxy: proxy
 
 # 反向隧道：把本地服务暴露到远端服务器，配置重载时只重启有变化的条目
-# 反代进来的流量按规则分流：IN-TYPE 为 SSH，IN-NAME 为隧道名，SRC-IP 为远端用户地址，目标是 forwards 的 local
+# 反代进来的流量按规则分流：IN-TYPE 为 WIREGUARD，IN-NAME 为隧道名，SRC-IP 为远端用户地址，目标是 forwards 的 local
 # 本地服务通常需要直连规则，如 IN-NAME,home-nas,DIRECT
 # 运行状态：GET /reverse-tunnels（state 为 connecting/running/retrying）
 reverse-tunnels:
-  # ssh -R，认证字段同 ssh 代理
-  - name: vps
-    type: ssh
+  # 本机作为 WireGuard 对端接入服务器，字段同 wireguard 代理。服务器端为 connaio-relay（用户态，无需 root）：
+  # connaio-relay -c relay.json，relay.json 为 {"password", "port"（UDP）, "peer"（本机隧道地址）, "forwards"（服务器监听地址）}，
+  # 由 Connaio 的隧道对话框经 SSH 安装；relay 在服务器上监听各 remote，经隧道转到本机隧道地址的同一端口。
+  # 本机 3 分钟无握手时 relay 直接拒绝新连接；connaio-relay -check 只检查配置能否运行，-version 输出版本（自身 sha256），
+  # 隧道内 relay 地址的 1 端口也应答版本，GET /reverse-tunnels 的 relay 字段即为此值
+  - name: wg-vps
+    type: wireguard
     server: vps.example.com
-    port: 22
-    username: root
-    private-key: id_ed25519 # 相对配置目录的路径，或直接填写私钥内容
-    # host-key: ["ssh-ed25519 AAAA..."]
+    port: 51820
+    ip: 10.8.0.2 # 本机隧道地址；relay 取同一 /24 的 .1（本机为 .1 时取 .254）
+    # 密码（至少 8 位）经 PBKDF2-SHA256（盐 connaio-wireguard，600000 轮，96 字节）依次得出本机私钥、服务器私钥、预共享密钥，
+    # relay 由同一密码得出它的一端；也可不用密码，直接填写 private-key、public-key（及 pre-shared-key），自建服务器端
+    password: <密码>
+    # persistent-keepalive: 25 # 默认 25，保持 NAT 映射；3 分钟无握手则重连
+    # ip-stack: {congestion-controller: bbr} # 默认 bbr，有丢包的长距离线路上远快于 cubic
+    # mtu: 1408 # 默认 1408；设了 dialer-proxy 时默认 1280，为代理自身的包头留出余量
     dialer-proxy: proxy # 可选
     forwards:
-      - remote: 0.0.0.0:8080 # 远端监听地址，非 127.0.0.1 需要 sshd 开启 GatewayPorts
+      - remote: 0.0.0.0:8080 # 服务器上的监听地址（127.0.0.1 为仅服务器本机），本机在隧道地址上接收同一端口，仅 TCP
         local: 127.0.0.1:80 # 按规则分流的目标
 
 # DNS 配置

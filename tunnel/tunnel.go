@@ -484,7 +484,7 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 	case Global:
 		proxy = proxies["GLOBAL"]
 		switch {
-		case metadata.Type == C.SSH:
+		case metadata.Type == C.WIREGUARD:
 			// reverse tunnels serve local targets that a global exit can't reach: keep their rules
 			proxy, rule, err = match(metadata, helper)
 		default:

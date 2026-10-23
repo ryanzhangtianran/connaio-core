@@ -17,6 +17,7 @@ import (
 	"github.com/metacubex/mihomo/common/atomic"
 	"github.com/metacubex/mihomo/component/dialer"
 	"github.com/metacubex/mihomo/component/proxydialer"
+	"github.com/metacubex/mihomo/component/relay"
 	"github.com/metacubex/mihomo/component/resolver"
 	"github.com/metacubex/mihomo/component/slowdown"
 	C "github.com/metacubex/mihomo/constant"
@@ -45,6 +46,7 @@ const (
 type wireguardGoDevice interface {
 	Close()
 	IpcSet(uapiConf string) error
+	IpcGet() (string, error)
 }
 
 type WireGuard struct {
@@ -777,6 +779,24 @@ func (w *WireGuard) genIpcConf(ctx context.Context, updateOnly bool) (string, er
 		}
 	}
 	return ipcConf, nil
+}
+
+// ListenTCP accepts the connections peers make to local, on this end's tunnel addresses (an
+// unspecified address takes them all): what a reverse tunnel serves.
+func (w *WireGuard) ListenTCP(ctx context.Context, local netip.AddrPort) (net.Listener, error) {
+	if err := w.init(ctx); err != nil {
+		return nil, err
+	}
+	return w.tunDevice.ListenTCP(ctx, "tcp", local)
+}
+
+// LastHandshake is the newest handshake with any peer, zero before the first.
+func (w *WireGuard) LastHandshake() time.Time {
+	conf, err := w.device.IpcGet()
+	if err != nil {
+		return time.Time{}
+	}
+	return relay.LastHandshake(conf)
 }
 
 // Close implements C.ProxyAdapter
