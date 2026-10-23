@@ -276,7 +276,7 @@ reverse-tunnels:
     password: <密码>
     # persistent-keepalive: 25 # 默认 25，保持 NAT 映射；3 分钟无握手则重连
     # ip-stack: {congestion-controller: bbr} # 默认 bbr，有丢包的长距离线路上远快于 cubic
-    # mtu: 1408 # 默认 1408；设了 dialer-proxy 时默认 1280，为代理自身的包头留出余量
+    # mtu: 1280 # 默认 1280，与服务器端程序一致：1408 时云服务器常见的 1450 网络发不出满长的包
     dialer-proxy: proxy # 可选
     forwards:
       - remote: 0.0.0.0:8080 # 服务器上的监听地址（127.0.0.1 为仅服务器本机），本机在隧道地址上接收同一端口，仅 TCP

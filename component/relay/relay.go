@@ -37,6 +37,12 @@ type Config struct {
 	Forwards []string `json:"forwards"` // where to listen on the server, e.g. 0.0.0.0:8080, or 127.0.0.1:1080 for the server only
 }
 
+// MTU is the reverse tunnel's, at both ends (Connaio's takes it as its default): WireGuard's own
+// 60-80 bytes on top, 1280 leaves packets of at most 1360, which fit any path that carries IPv6.
+// At 1408, the outbound's default, a server on a 1450-byte network (common in clouds) could send
+// none of its full-size packets: sendmmsg failed with EMSGSIZE and only retransmission got through.
+const MTU = 1280
+
 // dialTimeout bounds the dial through the tunnel: Connaio may have gone since its last handshake.
 const dialTimeout = 10 * time.Second
 
@@ -87,7 +93,7 @@ func Run(ctx context.Context, cfg Config) error {
 	self := Address(peer)
 	stack, err := mipstack.New(mipstack.Config{
 		LocalAddresses: []netip.Prefix{netip.PrefixFrom(self, 32)},
-		MTU:            1408, // the reverse tunnel's, Connaio's wireguard outbound default
+		MTU:            MTU,
 		TCP: mipstack.TCPSocketDefaults{
 			// BBR keeps its pace through loss, where CUBIC halves it: on a long lossy link to Connaio
 			// (100ms, 1% loss) uploads went from 3 to 28 Mbit/s. Connaio's end sends with BBR too.

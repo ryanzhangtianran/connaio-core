@@ -94,8 +94,8 @@ func parseWireGuard(t *Tunnel, mapping map[string]any, tunnel C.Tunnel) error {
 		// (100ms, 1% loss) downloads went from 2 to 69 Mbit/s. connaio-relay sends with BBR too.
 		opt.IPStack.CongestionController = "bbr"
 	}
-	if opt.MTU == 0 && opt.DialerProxy != "" {
-		opt.MTU = 1280 // the dialer-proxy's own headers on top: 1408-byte packets could outgrow the path and vanish
+	if opt.MTU == 0 {
+		opt.MTU = relay.MTU // see there: the outbound's 1408 outgrows many servers' paths, a dialer-proxy's headers on top even more
 	}
 	var relayAt netip.Addr // connaio-relay's tunnel address, asked for its version: a password tunnel's server is one
 	if _, ok := mapping["password"].(string); ok {

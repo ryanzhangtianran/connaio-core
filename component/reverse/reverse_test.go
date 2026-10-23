@@ -238,7 +238,8 @@ func TestLossyThroughput(t *testing.T) {
 		}
 	}()
 	cfg, public := startWG(t, "lossy")
-	cfg["port"] = lossyUDP(t, cfg["port"].(int), 50*time.Millisecond, 10)
+	var largest atomic.Int64
+	cfg["port"] = lossyUDP(t, cfg["port"].(int), 50*time.Millisecond, 10, &largest)
 	cfg["forwards"] = []any{map[string]any{"remote": public, "local": sink.Addr().String()}}
 	tun, err := Parse(cfg, startTunnel(t))
 	require.NoError(t, err)
@@ -263,11 +264,17 @@ func TestLossyThroughput(t *testing.T) {
 		t.Logf("%s: %.1f Mbit/s", mode, rate)
 		require.Greater(t, rate, least, map[string]string{"d": "this end sends", "u": "the relay sends"}[mode])
 	}
+	// both ends keep to relay.MTU: WireGuard adds 32 bytes (its header and tag) to the UDP payload
+	require.LessOrEqual(t, largest.Load(), int64(relay.MTU+32), "a WireGuard packet outgrew the tunnel MTU")
 }
 
 // lossyUDP relays UDP to port on this machine with delay each way and lossPermille of the packets
-// dropped, and returns the port it takes them on.
-func lossyUDP(t *testing.T, port int, delay time.Duration, lossPermille int64) int {
+// dropped, keeping the largest payload either way in largest, and returns the port it takes them on.
+func lossyUDP(t *testing.T, port int, delay time.Duration, lossPermille int64, largest *atomic.Int64) int {
+	grow := func(n int) {
+		for m := largest.Load(); int64(n) > m && !largest.CompareAndSwap(m, int64(n)); m = largest.Load() {
+		}
+	}
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	require.NoError(t, err)
 	up, err := net.Dial("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
@@ -283,6 +290,7 @@ func lossyUDP(t *testing.T, port int, delay time.Duration, lossPermille int64) i
 				return
 			}
 			client.Store(&a)
+			grow(n)
 			if !drop() {
 				b := append([]byte(nil), buf[:n]...)
 				time.AfterFunc(delay, func() { up.Write(b) })
@@ -296,6 +304,7 @@ func lossyUDP(t *testing.T, port int, delay time.Duration, lossPermille int64) i
 			if err != nil {
 				return
 			}
+			grow(n)
 			if a := client.Load(); a != nil && !drop() {
 				b := append([]byte(nil), buf[:n]...)
 				time.AfterFunc(delay, func() { pc.WriteTo(b, *a) })
