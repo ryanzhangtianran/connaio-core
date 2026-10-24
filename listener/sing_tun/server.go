@@ -274,6 +274,18 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		excludeMACAddress = append(excludeMACAddress, addr)
 	}
 
+	dnsMode := options.DNSMode
+	if dnsMode == "" && len(options.DNSHijack) == 0 {
+		// no dns-hijack (process-tun clears it) keeps the system's DNS where it is: otherwise auto-route
+		// points systemd-resolved (Linux) or the adapter (Windows) at the TUN, and every app gets fake IPs
+		dnsMode = tun.DNSModeDisabled
+	}
+	switch options.DNSMode {
+	case "", tun.DNSModeDisabled, tun.DNSModeNative, tun.DNSModeHijack:
+	default:
+		return nil, fmt.Errorf("invalid dns-mode: %s", options.DNSMode)
+	}
+
 	var dnsAdds []netip.AddrPort
 
 	for _, d := range options.DNSHijack {
@@ -390,6 +402,7 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		GSO:                                   options.GSO,
 		Inet4Address:                          options.Inet4Address,
 		Inet6Address:                          options.Inet6Address,
+		DNSMode:                               dnsMode,
 		AutoRoute:                             options.AutoRoute,
 		IPRoute2TableIndex:                    tableIndex,
 		IPRoute2RuleIndex:                     ruleIndex,
@@ -417,11 +430,8 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		FileDescriptor:                        options.FileDescriptor,
 		InterfaceMonitor:                      defaultInterfaceMonitor,
 		EXP_RecvMsgX:                          options.RecvMsgX,
-		// no dns-hijack (process-tun clears it) keeps the system's DNS where it is: otherwise auto-route
-		// points systemd-resolved (Linux) or the adapter (Windows) at the TUN, and every app gets fake IPs
-		EXP_DisableDNSHijack:     len(options.DNSHijack) == 0,
-		EXP_SendMsgX:             options.SendMsgX,
-		EXP_ProcessorsPerChannel: options.ProcessorsPerChannel,
+		EXP_SendMsgX:                          options.SendMsgX,
+		EXP_ProcessorsPerChannel:              options.ProcessorsPerChannel,
 	}
 
 	if options.AutoRedirect {
@@ -546,8 +556,8 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 	if options.FileDescriptor != 0 {
 		tunName = fmt.Sprintf("%s(fd=%d)", tunName, options.FileDescriptor)
 	}
-	l.addrStr = fmt.Sprintf("%s(%s,%s), mtu: %d, auto route: %v, auto redir: %v, ip stack: %s",
-		tunName, tunOptions.Inet4Address, tunOptions.Inet6Address, tunMTU, options.AutoRoute, options.AutoRedirect, options.Stack)
+	l.addrStr = fmt.Sprintf("%s(%s,%s), mtu: %d, auto route: %v, auto redir: %v, ip stack: %s, dns mode: %s",
+		tunName, tunOptions.Inet4Address, tunOptions.Inet6Address, tunMTU, options.AutoRoute, options.AutoRedirect, options.Stack, options.DNSMode)
 	return
 }
 
