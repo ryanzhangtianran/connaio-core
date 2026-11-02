@@ -7,7 +7,7 @@ on:
       - ".github/ISSUE_TEMPLATE/**"
     branches:
       - Alpha
-      - reverse-tunnels # the branch Connaio builds its core from
+      - main # the branch Connaio builds its core from
     tags:
       - "v*"
   pull_request:
